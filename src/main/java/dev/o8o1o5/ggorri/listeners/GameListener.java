@@ -5,23 +5,27 @@ import dev.o8o1o5.ggorri.game.PlayerGameData;
 import dev.o8o1o5.ggorri.manager.GameManager;
 import dev.o8o1o5.ggorri.manager.PlayerManager;
 import org.bukkit.ChatColor;
+import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.entity.EntityDamageEvent.DamageCause;
+import org.bukkit.inventory.ItemStack;
 
-import java.util.UUID;
+import java.util.*;
 import java.util.logging.Level;
 
 public class GameListener implements Listener {
     private final GGORRI plugin;
     private final GameManager gameManager;
+    private final Random random;
 
     public GameListener(GGORRI plugin, GameManager gameManager) {
         this.plugin = plugin;
         this.gameManager = gameManager;
+        this.random = new Random();
     }
 
     // PvP damage event
@@ -53,16 +57,48 @@ public class GameListener implements Listener {
     // Player death event
     @EventHandler
     public void onPlayerDeath(PlayerDeathEvent event) {
-        Player victim = event.getEntity();
-        UUID victimUUID = victim.getUniqueId();
+        Player deadPlayer = event.getEntity();
 
-        // 게임 진행 중인 플레이어만 처리
-        if (!gameManager.getPlayerManager().getAllPlayersGameData().containsKey(victimUUID)) {
+        if (gameManager.getCurrentStatus() != GameManager.GameStatus.IN_GAME) {
             return;
         }
 
-        DamageCause cause = event.getEntity().getLastDamageCause() != null ? event.getEntity().getLastDamageCause().getCause() : DamageCause.CUSTOM;
+        event.setShowDeathMessages(false);
+        event.getDrops().clear();
+        event.setDroppedExp(0);
 
-        gameManager.getGameRulesManager().handlePlayerDeath(victim, victim.getKiller(), cause);
+        List<ItemStack> playerInventoryItems = new ArrayList<>();
+        for (ItemStack item : deadPlayer.getInventory().getContents()) {
+            if (item != null && item.getType() != Material.AIR) {
+                playerInventoryItems.add(item);
+            }
+        }
+        for (ItemStack item : deadPlayer.getInventory().getArmorContents()) {
+            if (item != null && item.getType() != Material.AIR) {
+                playerInventoryItems.add(item);
+            }
+        }
+        ItemStack offHand = deadPlayer.getInventory().getItemInOffHand();
+        if (offHand != null && offHand.getType() != Material.AIR) {
+            playerInventoryItems.add(offHand);
+        }
+
+        Collections.shuffle(playerInventoryItems, random);
+
+        int itemsToDropCount = playerInventoryItems.size() / 2;
+        if (itemsToDropCount == 0 && !playerInventoryItems.isEmpty()) {
+            itemsToDropCount = 1;
+        }
+
+        List<ItemStack> droppedItems = new ArrayList<>();
+        for (int i = 0; i < itemsToDropCount; i++) {
+            if (i >= playerInventoryItems.size()) break;
+            ItemStack item = playerInventoryItems.get(i);
+            droppedItems.add(item);
+            deadPlayer.getInventory().remove(item);
+        }
+
+        DamageCause cause = event.getEntity().getLastDamageCause() != null ? event.getEntity().getLastDamageCause().getCause() : DamageCause.CUSTOM;
+        gameManager.getGameRulesManager().handlePlayerDeath(deadPlayer, deadPlayer.getKiller(), cause);
     }
 }

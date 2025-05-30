@@ -9,6 +9,7 @@ import org.bukkit.block.data.type.Chain;
 import org.bukkit.entity.Player;
 import org.bukkit.potion.PotionEffectType; // PotionEffectType 임포트
 
+import javax.swing.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
@@ -23,6 +24,8 @@ public class GameManager {
     private final SpawnManager spawnManager;
     private final ChainManager chainManager;
     private final GameRulesManager gameRulesManager;
+    private final ActionBarManager actionBarManager;
+    private final BorderManager borderManager;
 
     private World gameWorld;
 
@@ -34,7 +37,9 @@ public class GameManager {
         this.playerManager = new PlayerManager(plugin, playersInGame);
         this.spawnManager = new SpawnManager(plugin);
         this.chainManager = new ChainManager(plugin, playersInGame);
-        this.gameRulesManager = new GameRulesManager(plugin, this, playerManager, spawnManager, chainManager);
+        this.actionBarManager = new ActionBarManager(plugin);
+        this.borderManager = new BorderManager(plugin, actionBarManager, playersInGame);
+        this.gameRulesManager = new GameRulesManager(plugin, this, playerManager, spawnManager, chainManager, borderManager);
 
         this.gameWorld = plugin.getServer().getWorld("world");
         if (this.gameWorld == null) {
@@ -117,6 +122,8 @@ public class GameManager {
 
         chainManager.setupPlayerTargets(); // 플레이어 타겟 설정
         spawnManager.spawnPlayers(new ArrayList<>(playersInGame.keySet())); // 플레이어 스폰 및 초기화
+        borderManager.setupInitialBorder();
+        borderManager.startBorderSystem();
 
         currentStatus = GameStatus.IN_GAME;
         plugin.getServer().broadcastMessage(ChatColor.GREEN + "§l[GGORRI] 게임 시작! 꼬리 고리를 따라가세요!");
@@ -172,47 +179,6 @@ public class GameManager {
         currentStatus = GameStatus.WAITING;
         plugin.getLogger().info("[GGORRI] 게임 종료 및 초기화 완료.");
         return true;
-    }
-
-    /**
-     * 지정된 시간 후 플레이어를 부활시킵니다.
-     * @param playerUUID 부활시킬 플레이어의 UUID
-     * @param delayTicks 부활까지의 지연 시간 (틱)
-     */
-    public void schedulePlayerRespawn(UUID playerUUID, long delayTicks) {
-        Bukkit.getScheduler().runTaskLater(plugin, () -> {
-            Player player = plugin.getServer().getPlayer(playerUUID);
-            if (player != null && playersInGame.containsKey(playerUUID)) {
-                respawnPlayer(player);
-            } else if (player != null) {
-                player.spigot().respawn();
-            }
-        }, delayTicks);
-    }
-
-    /**
-     * 실제 플레이어를 부활시키는 로직.
-     * 안전한 스폰 위치로 텔레포트하고, 게임 모드를 변경하며, 상태를 초기화합니다.
-     * @param player 부활시킬 플레이어
-     */
-    private void respawnPlayer(Player player) {
-        if (gameWorld == null) {
-            plugin.getLogger().severe("[GGORRI] 게임 월드가 설정되지 않아 플레이어를 부활시킬 수 없습니다.");
-            player.sendMessage(ChatColor.RED + "[GGORRI] 게임 월드 오류로 부활할 수 없습니다.");
-            player.spigot().respawn();
-            return;
-        }
-
-        Location spawnLoc = spawnManager.findSafeSpawnLocation(gameWorld, spawnManager.getWorldBorderSize() ,100);
-        if (spawnLoc == null) {
-            plugin.getLogger().warning("[GGORRI] 플레이어 " + player.getName() + "를 위한 안전한 부활 위치를 찾지 못했습니다. 월드 스폰으로 이동합니다.");
-            player.sendMessage(ChatColor.RED + "[GGORRI] 안전한 부활 위치를 찾지 못해 월드 스폰으로 이동합니다.");
-        }
-
-        player.spigot().respawn();
-        playerManager.resetPlayer(player);
-        player.teleport(spawnLoc);
-        player.sendMessage("[GGORRI] 부활했습니다! 다시 꼬리를 쫓으세요!");
     }
 
     /**

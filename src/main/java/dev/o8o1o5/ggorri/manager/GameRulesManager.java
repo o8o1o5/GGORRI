@@ -26,13 +26,15 @@ public class GameRulesManager {
     private final PlayerManager playerManager;
     private final SpawnManager spawnManager;
     private final ChainManager chainManager;
+    private final BorderManager borderManager;
 
-    public GameRulesManager(GGORRI plugin, GameManager gameManager, PlayerManager playerManager, SpawnManager spawnManager, ChainManager chainManager) {
+    public GameRulesManager(GGORRI plugin, GameManager gameManager, PlayerManager playerManager, SpawnManager spawnManager, ChainManager chainManager, BorderManager borderManager) {
         this.plugin = plugin;
         this.gameManager = gameManager;
         this.playerManager = playerManager;
         this.spawnManager = spawnManager;
         this.chainManager = chainManager;
+        this.borderManager = borderManager;
     }
 
     /**
@@ -52,55 +54,47 @@ public class GameRulesManager {
 
         plugin.getLogger().info("[GGORRI] " + deadPlayer.getName() + " 사망! 원인: " + damageCause.name());
 
-        if (gameManager.getCurrentStatus() != GameManager.GameStatus.IN_GAME) {
-            playerManager.resetPlayer(deadPlayer);
-            if (spawnManager.getGameWorld() != null) {
-                deadPlayer.teleport(spawnManager.getGameWorld().getSpawnLocation());
-            }
-            return;
-        }
+        deadPlayerData.incrementDeathCount();
 
-        if (deadPlayerData.getRole() == PlayerRole.SLAVE) {
-            handleNaturalDeath(deadPlayer, deadPlayerData);
-            playerManager.clearDamageRecordsForPlayer(deadUUID);
-            checkWinCondition();
-            return;
-        }
+        long baseRespawnDelaySeconds = 60;
+        long calculatedRespawnDelaySeconds = (long) (baseRespawnDelaySeconds * Math.pow(1.5, deadPlayerData.getDeathCount() - 1));
+        calculatedRespawnDelaySeconds = Math.max(1, calculatedRespawnDelaySeconds);
+        calculatedRespawnDelaySeconds = Math.min(600, calculatedRespawnDelaySeconds);
 
         UUID actualKillerUUID = null;
         if (killer != null) {
             actualKillerUUID = killer.getUniqueId();
         } else {
-            // Bukkit의 getKiller()가 null인 경우, playerDamageTracker를 통해 마지막 공격자 확인
             actualKillerUUID = playerManager.getLastAttacker(deadUUID);
             if (actualKillerUUID != null && !playerManager.getAllPlayersGameData().containsKey(actualKillerUUID)) {
-                actualKillerUUID = null; // 오프라인 또는 게임 참가자가 아닌 플레이어는 유효한 킬러로 간주하지 않음
+                actualKillerUUID = null;
             }
         }
 
+        boolean spawnNearTeamLeader = false;
+
         if (actualKillerUUID != null && playerManager.getAllPlayersGameData().containsKey(actualKillerUUID)) {
-            // 가해자가 게임 내 플레이어인 경우 PvP로 간주
             PlayerGameData killerPlayerData = playerManager.getPlayerGameData(actualKillerUUID);
-            if (killerPlayerData != null && killerPlayerData.getRole() == PlayerRole.LEADER) { // 킬러가 팀장인 경우
+            if (killerPlayerData != null && killerPlayerData.getRole() == PlayerRole.LEADER) {
                 if (killerPlayerData.getDirectTargetUUID() != null && killerPlayerData.getDirectTargetUUID().equals(deadUUID)) {
-                    // A. 정상 처치 (직계 타겟 처치)
                     plugin.getLogger().info("[GGORRI] " + deadPlayer.getName() + "이(가) " + plugin.getServer().getOfflinePlayer(actualKillerUUID).getName() + "에게 정상 처치됨.");
                     handleNormalKill(deadPlayer, plugin.getServer().getPlayer(actualKillerUUID));
+                    spawnNearTeamLeader = true;
                 } else {
-                    // B. 잘못된 타겟 처치 (직계 타겟이 아닌 다른 플레이어 PvP 사망)
                     plugin.getLogger().info("[GGORRI] " + deadPlayer.getName() + "이(가) " + plugin.getServer().getOfflinePlayer(actualKillerUUID).getName() + "에게 잘못된 타겟으로 처치됨.");
                     handleWrongTargetKill(deadPlayer, plugin.getServer().getPlayer(actualKillerUUID));
+                    spawnNearTeamLeader = true;
                 }
             } else {
-                // 킬러가 노예이거나 게임 참여자가 아님 -> 자연사 처리
                 plugin.getLogger().info("[GGORRI] " + deadPlayer.getName() + "이(가) (비유효한 킬러: " + (killer != null ? killer.getName() : "없음") + " / 트래커 킬러: " + (actualKillerUUID != null ? plugin.getServer().getOfflinePlayer(actualKillerUUID).getName() : "없음") + ")에게 사망. 자연사로 처리.");
-                handleNaturalDeath(deadPlayer, deadPlayerData);
+                Bukkit.broadcastMessage(ChatColor.GRAY + deadPlayer.getName() + "님이 사망했습니다. (자연사)");
             }
         } else {
-            // C. 자연사 (환경 사망 또는 PvP가 아닌 사망)
             plugin.getLogger().info("[GGORRI] " + deadPlayer.getName() + "이(가) 자연사했습니다. (킬러 없음 / 유효하지 않은 킬러)");
-            handleNaturalDeath(deadPlayer, deadPlayerData);
+            Bukkit.broadcastMessage(ChatColor.GRAY + deadPlayer.getName() + "님이 사망했습니다. (자연사)");
         }
+
+        schedulePlayerRespawn(deadUUID, calculatedRespawnDelaySeconds * 20L, spawnNearTeamLeader);
 
         playerManager.clearDamageRecordsForPlayer(deadUUID); // 사망 후 데미지 트래커 정리
         checkWinCondition(); // 게임 종료 조건 체크
@@ -117,9 +111,6 @@ public class GameRulesManager {
         Bukkit.broadcastMessage(ChatColor.GREEN + "§l" + killer.getName() + "님이 " + deadPlayer.getName() + "을(를) 정상 처치하여 자신의 노예로 만들었습니다!");
         killer.sendMessage(ChatColor.AQUA + "새로운 타겟: " + (playerManager.getPlayerGameData(killer.getUniqueId()).getDirectTargetUUID() != null ?
                 Bukkit.getOfflinePlayer(playerManager.getPlayerGameData(killer.getUniqueId()).getDirectTargetUUID()).getName() : "없음"));
-
-        // 사망한 플레이어 부활 스케줄링
-        schedulePlayerRespawn(deadPlayer.getUniqueId(), 60 * 20L); // 60초 후 리스폰
     }
 
     /**
@@ -134,43 +125,30 @@ public class GameRulesManager {
         PlayerGameData deadPlayerData = playerManager.getPlayerGameData(deadUUID);
         if (deadPlayerData != null) {
             deadPlayerData.setRole(PlayerRole.SLAVE);
-            // !!! 수정: 노예가 된 플레이어에게 마스터 UUID 설정 !!!
-            deadPlayerData.setMasterUUID(killerUUID); // <-- 이 줄이 새로 추가되었습니다!
-            deadPlayerData.setDirectTargetUUID(null); // 노예는 이제 타겟 없음
+            deadPlayerData.setMasterUUID(killerUUID);
+            deadPlayerData.setDirectTargetUUID(null);
             Bukkit.broadcastMessage(ChatColor.YELLOW + "§l" + killer.getName() + "님이 잘못된 타겟인 " + deadPlayer.getName() + "을(를) 처치했습니다!");
             Bukkit.broadcastMessage(ChatColor.YELLOW + deadPlayer.getName() + "님은 이제 " + killer.getName() + "님의 노예가 됩니다.");
         }
 
         // TODO: 잘못 처치한 플레이어(killer)에게 패널티 부여 로직 추가 (예: 디버프)
-
-        schedulePlayerRespawn(deadPlayer.getUniqueId(), 1); // 즉시 리스폰
-    }
-
-    /**
-     * 자연사 로직: 사망 횟수 증가, 부활 시간 증가, 노예는 모든 사망을 자연사로 간주.
-     * @param deadPlayer 죽은 플레이어
-     * @param deadPlayerData 죽은 플레이어의 PlayerGameData
-     */
-    private void handleNaturalDeath(Player deadPlayer, PlayerGameData deadPlayerData) {
-        deadPlayerData.incrementDeathCount();
-
-        schedulePlayerRespawn(deadPlayer.getUniqueId(), 60 * 20L); // 틱 단위 변환
     }
 
     /**
      * 지정된 시간 후 플레이어를 부활시킵니다.
      * @param playerUUID 부활시킬 플레이어의 UUID
      * @param delayTicks 부활까지의 지연 시간 (틱)
+     * @param spawnNearTeamLeader 팀장 근처에서 부활할지 여부 (true: 팀장 근처, false: 일반 스폰)
      */
-    public void schedulePlayerRespawn(UUID playerUUID, long delayTicks) {
+    public void schedulePlayerRespawn(UUID playerUUID, long delayTicks, boolean spawnNearTeamLeader) {
         new BukkitRunnable() {
             @Override
             public void run() {
                 Player player = plugin.getServer().getPlayer(playerUUID);
                 if (player != null && playerManager.getAllPlayersGameData().containsKey(playerUUID)) {
-                    respawnPlayer(player);
+                    respawnPlayer(player, spawnNearTeamLeader);
                 } else if (player != null) {
-                    player.spigot().respawn(); // 게임에서 이탈한 플레이어는 기본 리스폰
+                    player.spigot().respawn();
                 }
             }
         }.runTaskLater(plugin, delayTicks);
@@ -180,8 +158,9 @@ public class GameRulesManager {
      * 실제 플레이어를 부활시키는 로직.
      * 안전한 스폰 위치로 텔레포트하고, 게임 모드를 변경하며, 상태를 초기화하고 무적 효과를 부여합니다.
      * @param player 부활시킬 플레이어
+     * @param spawnNearTeamLeader 팀장 근처에서 부활할지 여부
      */
-    private void respawnPlayer(Player player) {
+    private void respawnPlayer(Player player, boolean spawnNearTeamLeader) {
         PlayerGameData playerData = playerManager.getPlayerGameData(player.getUniqueId());
         if (playerData == null) {
             plugin.getLogger().warning("[GGORRI] 부활하려는 플레이어(" + player.getName() + ")의 게임 데이터가 없습니다.");
@@ -189,18 +168,15 @@ public class GameRulesManager {
             return;
         }
 
-        player.spigot().respawn(); // 클라이언트 측면 리스폰
+        player.spigot().respawn();
 
         Location spawnLoc = null;
 
-        // 노예 역할이고, 마스터가 있는 경우 (findTeamLeaderForSlave가 masterUUID를 반환하는 경우)
-        // slaves always have a master, a leader has no master
-        if (playerData.getRole() == PlayerRole.SLAVE && playerData.getMasterUUID() != null) { // <-- Condition changed to use getMasterUUID()
-            UUID teamLeaderUUID = findTeamLeaderForSlave(player.getUniqueId()); // This should now directly return the master UUID
+        if (spawnNearTeamLeader) {
+            UUID teamLeaderUUID = findTeamLeaderForSlave(player.getUniqueId());
             if (teamLeaderUUID != null) {
                 Player teamLeader = plugin.getServer().getPlayer(teamLeaderUUID);
                 if (teamLeader != null && teamLeader.isOnline()) {
-                    // 팀장 근처 스폰 로직 (2.1단계)
                     spawnLoc = spawnManager.findSafeSpawnLocation(teamLeader.getLocation(), 100, 10);
                     if (spawnLoc == null) {
                         plugin.getLogger().warning("[GGORRI] " + player.getName() + " (노예)를 위한 팀장 근처 안전 스폰 위치를 찾지 못했습니다. 일반 스폰으로 이동합니다.");
@@ -213,16 +189,12 @@ public class GameRulesManager {
                     player.sendMessage(ChatColor.YELLOW + "[GGORRI] 팀장이 오프라인이거나 찾을 수 없어 일반 스폰으로 이동합니다.");
                 }
             } else {
-                // 이 경우는 masterUUID가 null이므로 SLAVE 조건에 해당하지 않음
                 plugin.getLogger().warning("[GGORRI] " + player.getName() + " (노예)의 팀 리더 UUID를 찾을 수 없습니다. 일반 스폰으로 이동합니다.");
                 player.sendMessage(ChatColor.YELLOW + "[GGORRI] 팀 정보를 찾을 수 없어 일반 스폰으로 이동합니다.");
             }
         }
 
-        // 팀장 또는 팀장이 없는 노예 (오류 케이스)의 경우 기본 스폰 위치
         if (spawnLoc == null) {
-            // 게임 월드 보더 크기를 사용하는 대신, INITIAL_BORDER_SIZE (혹은 게임 시작 시 설정된 보더 크기)를 사용하는 것이 더 정확할 수 있습니다.
-            // 현재 SpawnManager.getWorldBorderSize()는 INITIAL_BORDER_SIZE를 반환하는 것으로 보입니다.
             spawnLoc = spawnManager.findSafeSpawnLocation(spawnManager.getGameWorld(), (int)spawnManager.getGameWorld().getWorldBorder().getSize(), 100);
             if (spawnLoc == null) {
                 plugin.getLogger().warning("[GGORRI] 플레이어 " + player.getName() + "를 위한 안전한 부활 위치를 찾지 못했습니다. 월드 스폰으로 이동합니다.");
@@ -233,13 +205,12 @@ public class GameRulesManager {
             }
         }
 
-        playerManager.resetPlayer(player); // 초기화
+        playerManager.resetPlayer(player);
         player.teleport(spawnLoc);
         player.sendMessage("[GGORRI] 부활했습니다! 다시 꼬리를 쫓으세요!");
 
-        // 부활 시 무적 효과 (5초)
-        player.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, 20 * 5, 255, false, false)); // Resistance V
-        player.addPotionEffect(new PotionEffect(PotionEffectType.FIRE_RESISTANCE, 20 * 5, 0, false, false)); // Fire Resistance
+        player.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, 20 * 5, 255, false, false));
+        player.addPotionEffect(new PotionEffect(PotionEffectType.FIRE_RESISTANCE, 20 * 5, 0, false, false));
 
         plugin.getLogger().info("[GGORRI] " + player.getName() + "님이 " + spawnLoc.getBlockX() + ", " + spawnLoc.getBlockY() + ", " + spawnLoc.getBlockZ() + "로 부활했습니다.");
     }
