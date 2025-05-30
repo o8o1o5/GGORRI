@@ -119,7 +119,7 @@ public class GameRulesManager {
                 Bukkit.getOfflinePlayer(playerManager.getPlayerGameData(killer.getUniqueId()).getDirectTargetUUID()).getName() : "없음"));
 
         // 사망한 플레이어 부활 스케줄링
-        schedulePlayerRespawn(deadPlayer.getUniqueId(), 1); // 즉시 리스폰. 노예는 팀장 근처에서 부활 (2.1단계)
+        schedulePlayerRespawn(deadPlayer.getUniqueId(), 60 * 20L); // 60초 후 리스폰
     }
 
     /**
@@ -153,10 +153,8 @@ public class GameRulesManager {
      */
     private void handleNaturalDeath(Player deadPlayer, PlayerGameData deadPlayerData) {
         deadPlayerData.incrementDeathCount();
-        long respawnDelaySeconds = deadPlayerData.getDeathCount() * 5; // 사망 횟수 당 5초 증가 (예시)
-        Bukkit.broadcastMessage(ChatColor.GRAY + deadPlayer.getName() + "님은 자연사했습니다. 사망 횟수: " + deadPlayerData.getDeathCount() + "회. 부활 대기 시간: " + respawnDelaySeconds + "초.");
 
-        schedulePlayerRespawn(deadPlayer.getUniqueId(), respawnDelaySeconds * 20L); // 틱 단위 변환
+        schedulePlayerRespawn(deadPlayer.getUniqueId(), 60 * 20L); // 틱 단위 변환
     }
 
     /**
@@ -194,27 +192,44 @@ public class GameRulesManager {
         player.spigot().respawn(); // 클라이언트 측면 리스폰
 
         Location spawnLoc = null;
-        // 2.1단계: 노예는 팀장 근처에서 부활
-        if (playerData.getRole() == PlayerRole.SLAVE && playerData.getDirectTargetUUID() == null) {
-            // 노예인데 타겟이 없다는 것은 종속된 상태 (팀장 죽음 -> 노예화), 팀장 근처 스폰 로직
-            UUID teamLeaderUUID = findTeamLeaderForSlave(player.getUniqueId()); // 노예의 팀장을 찾아야 함 (현재 PlayerGameData에 필드 없음, 임시로 찾음)
+
+        // 노예 역할이고, 마스터가 있는 경우 (findTeamLeaderForSlave가 masterUUID를 반환하는 경우)
+        // slaves always have a master, a leader has no master
+        if (playerData.getRole() == PlayerRole.SLAVE && playerData.getMasterUUID() != null) { // <-- Condition changed to use getMasterUUID()
+            UUID teamLeaderUUID = findTeamLeaderForSlave(player.getUniqueId()); // This should now directly return the master UUID
             if (teamLeaderUUID != null) {
                 Player teamLeader = plugin.getServer().getPlayer(teamLeaderUUID);
                 if (teamLeader != null && teamLeader.isOnline()) {
+                    // 팀장 근처 스폰 로직 (2.1단계)
                     spawnLoc = spawnManager.findSafeSpawnLocation(teamLeader.getLocation(), 100, 10);
                     if (spawnLoc == null) {
                         plugin.getLogger().warning("[GGORRI] " + player.getName() + " (노예)를 위한 팀장 근처 안전 스폰 위치를 찾지 못했습니다. 일반 스폰으로 이동합니다.");
+                        player.sendMessage(ChatColor.RED + "[GGORRI] 팀장 근처 부활 위치를 찾지 못해 일반 스폰으로 이동합니다.");
+                    } else {
+                        player.sendMessage(ChatColor.GREEN + "[GGORRI] 팀장 근처에서 부활했습니다!");
                     }
+                } else {
+                    plugin.getLogger().warning("[GGORRI] " + player.getName() + " (노예)의 팀장(" + (teamLeaderUUID != null ? plugin.getServer().getOfflinePlayer(teamLeaderUUID).getName() : "없음") + ")이 오프라인이거나 유효하지 않습니다. 일반 스폰으로 이동합니다.");
+                    player.sendMessage(ChatColor.YELLOW + "[GGORRI] 팀장이 오프라인이거나 찾을 수 없어 일반 스폰으로 이동합니다.");
                 }
+            } else {
+                // 이 경우는 masterUUID가 null이므로 SLAVE 조건에 해당하지 않음
+                plugin.getLogger().warning("[GGORRI] " + player.getName() + " (노예)의 팀 리더 UUID를 찾을 수 없습니다. 일반 스폰으로 이동합니다.");
+                player.sendMessage(ChatColor.YELLOW + "[GGORRI] 팀 정보를 찾을 수 없어 일반 스폰으로 이동합니다.");
             }
         }
 
+        // 팀장 또는 팀장이 없는 노예 (오류 케이스)의 경우 기본 스폰 위치
         if (spawnLoc == null) {
-            spawnLoc = spawnManager.findSafeSpawnLocation(spawnManager.getGameWorld(), spawnManager.getWorldBorderSize(), 100);
+            // 게임 월드 보더 크기를 사용하는 대신, INITIAL_BORDER_SIZE (혹은 게임 시작 시 설정된 보더 크기)를 사용하는 것이 더 정확할 수 있습니다.
+            // 현재 SpawnManager.getWorldBorderSize()는 INITIAL_BORDER_SIZE를 반환하는 것으로 보입니다.
+            spawnLoc = spawnManager.findSafeSpawnLocation(spawnManager.getGameWorld(), (int)spawnManager.getGameWorld().getWorldBorder().getSize(), 100);
             if (spawnLoc == null) {
                 plugin.getLogger().warning("[GGORRI] 플레이어 " + player.getName() + "를 위한 안전한 부활 위치를 찾지 못했습니다. 월드 스폰으로 이동합니다.");
                 player.sendMessage(ChatColor.RED + "[GGORRI] 안전한 부활 위치를 찾지 못해 월드 스폰으로 이동합니다.");
                 spawnLoc = spawnManager.getGameWorld().getSpawnLocation();
+            } else {
+                player.sendMessage(ChatColor.GREEN + "[GGORRI] 일반 스폰 지점에서 부활했습니다!");
             }
         }
 
@@ -229,10 +244,7 @@ public class GameRulesManager {
         plugin.getLogger().info("[GGORRI] " + player.getName() + "님이 " + spawnLoc.getBlockX() + ", " + spawnLoc.getBlockY() + ", " + spawnLoc.getBlockZ() + "로 부활했습니다.");
     }
 
-    // TODO: PlayerGameData에 teamLeaderUUID 필드를 추가하면 이 메서드가 훨씬 간단해집니다.
-    // 현재는 모든 리더를 역추적하여 이 노예의 팀장이 누구인지 '고리'를 따라 찾아야 합니다.
-    // 이는 매우 비효율적이고 복잡하므로, PlayerGameData에 teamLeaderUUID를 추가하는 것을 강력히 권장합니다.
-    private UUID findTeamLeaderForSlave(UUID slaveUUID) {
+    public UUID findTeamLeaderForSlave(UUID slaveUUID) {
         // !!! 수정: masterUUID 필드를 활용하도록 로직 간소화 !!!
         PlayerGameData slaveData = playerManager.getPlayerGameData(slaveUUID);
         if (slaveData == null) {

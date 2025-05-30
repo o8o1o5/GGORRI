@@ -357,4 +357,8 @@ public class GameManager {
     public ChainManager getChainManager() {
         return chainManager;
     }
+
+    public GameRulesManager getGameRulesManager() {
+        return gameRulesManager;
+    }
 }
