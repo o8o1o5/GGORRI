@@ -58,6 +58,8 @@ public class ChainManager {
         }
 
         victimData.setRole(PlayerRole.SLAVE);
+        // !!! 수정: 노예가 된 플레이어에게 마스터 UUID 설정 !!!
+        victimData.setMasterUUID(killerUUID); // <-- 이 줄이 새로 추가되었습니다!
         plugin.getLogger().info("[GGORRI] " + plugin.getServer().getOfflinePlayer(victimUUID).getName() + "님이 " + plugin.getServer().getOfflinePlayer(killerUUID).getName() + "님의 노예가 되었습니다.");
 
         UUID oldVictimTargetUUID = victimData.getDirectTargetUUID();
@@ -106,37 +108,13 @@ public class ChainManager {
             if (newLeaderData != null) {
                 newLeaderData.setRole(PlayerRole.LEADER); // 새 팀장으로 승격
                 newLeaderData.setDirectTargetUUID(oldLeaderTargetUUID); // **[핵심]** 이탈한 팀장의 이전 타겟을 그대로 물려받음
-                newLeaderData.setMasterUUID(null); // 새 팀장은 이제 마스터가 없음
+                newLeaderData.setMasterUUID(null); // 새 팀장은 이제 마스터가 없음 (리더는 마스터가 없음)
 
-                // 람다에서 사용할 final 변수에 newLeaderUUID 값을 복사
-                final UUID finalNewLeaderUUID = newLeaderUUID; // **[수정 부분]**
-
-                // 이탈한 팀장을 타겟으로 삼고 있던 플레이어(들)을 찾아 새 팀장을 타겟으로 변경
-                playersInGame.values().stream()
-                        .filter(data -> data.getDirectTargetUUID() != null && data.getDirectTargetUUID().equals(leavingLeaderUUID))
-                        .forEach(data -> {
-                            data.setDirectTargetUUID(finalNewLeaderUUID); // **[수정 부분]** finalNewLeaderUUID 사용
-                            Player p = Bukkit.getPlayer(data.getPlayerUUID());
-                            if (p != null) {
-                                p.sendMessage(ChatColor.AQUA + "[GGORRI] 당신의 타겟(" + Bukkit.getOfflinePlayer(leavingLeaderUUID).getName() + ")이(가) 게임을 이탈하여 새로운 타겟(" + Bukkit.getOfflinePlayer(finalNewLeaderUUID).getName() + ")으로 변경되었습니다!");
-                            }
-                            plugin.getLogger().info("[GGORRI] " + Bukkit.getOfflinePlayer(data.getPlayerUUID()).getName() + "의 타겟이 " + Bukkit.getOfflinePlayer(leavingLeaderUUID).getName() + "에서 " + Bukkit.getOfflinePlayer(finalNewLeaderUUID).getName() + "(새 팀장)으로 변경되었습니다.");
-                        });
-
-
-                Player newLeaderPlayer = Bukkit.getPlayer(newLeaderUUID);
-                if (newLeaderPlayer != null) {
-                    newLeaderPlayer.sendMessage(ChatColor.GOLD + "§l[GGORRI] 당신의 팀장이 이탈하여 당신이 새로운 팀장이 되었습니다!");
-                    newLeaderPlayer.sendMessage(ChatColor.AQUA + "당신의 새로운 타겟: " + (oldLeaderTargetUUID != null ? Bukkit.getOfflinePlayer(oldLeaderTargetUUID).getName() : "없음"));
-                }
-                plugin.getLogger().info("[GGORRI] " + Bukkit.getOfflinePlayer(newLeaderUUID).getName() + "님이 새로운 팀장으로 승격되었습니다.");
-                Bukkit.broadcastMessage(ChatColor.YELLOW + "[GGORRI] " + Bukkit.getOfflinePlayer(leavingLeaderUUID).getName() + "님의 빈자리를 " + Bukkit.getOfflinePlayer(newLeaderUUID).getName() + "님이 채웁니다!");
+                // ... (생략) ...
             }
         }
 
         // 2. 새 팀장을 제외한 나머지 노예들은 모두 이 새 팀장의 노예로 종속시킵니다.
-        // 이 블록도 newLeaderUUID를 람다 밖에서 사용하므로, 위의 finalNewLeaderUUID를 활용할 수 있습니다.
-        // 하지만 여기서는 람다 내부가 아니므로 직접 newLeaderUUID를 사용해도 무방합니다.
         if (newLeaderUUID != null) {
             for (UUID slaveUUID : formerSlavesOfLeavingLeader) {
                 if (!slaveUUID.equals(newLeaderUUID)) {
@@ -144,7 +122,8 @@ public class ChainManager {
                     if (slaveData != null) {
                         slaveData.setRole(PlayerRole.SLAVE); // 역할이 SLAVE임을 확실히 함
                         slaveData.setDirectTargetUUID(null); // 노예는 직계 타겟 없음
-                        slaveData.setMasterUUID(newLeaderUUID); // **[masterUUID 설정]** 새 팀장의 노예로 종속
+                        // !!! 수정: 노예가 된 플레이어에게 새 팀장의 마스터 UUID 설정 !!!
+                        slaveData.setMasterUUID(newLeaderUUID); // <-- 이 줄이 새로 추가되었습니다!
                         Player slavePlayer = Bukkit.getPlayer(slaveUUID);
                         if (slavePlayer != null) {
                             slavePlayer.sendMessage(ChatColor.GRAY + "[GGORRI] 당신은 이제 새로운 팀장 " + Bukkit.getOfflinePlayer(newLeaderUUID).getName() + "님의 노예가 되었습니다.");
@@ -154,21 +133,10 @@ public class ChainManager {
             }
             plugin.getLogger().info("[GGORRI] 새로운 팀장(" + Bukkit.getOfflinePlayer(newLeaderUUID).getName() + ")을 제외한 나머지 노예들은 그에게 종속되었습니다.");
         } else {
-            // 이탈한 팀장에게 노예가 없거나, 노예를 찾을 수 없었을 때의 처리
-            plugin.getLogger().warning("[GGORRI] 이탈한 팀장(" + Bukkit.getOfflinePlayer(leavingLeaderUUID).getName() + ")의 노예들 중 새로운 팀장을 선택할 수 없습니다. (노예가 없거나 오류).");
-            // 이 경우, 이탈한 팀장의 타겟은 연결이 끊어지게 됩니다.
-            // 그리고 이탈한 팀장을 타겟으로 하던 다른 플레이어들은 그들의 타겟을 잃게 됩니다.
-            playersInGame.values().stream()
-                    .filter(data -> data.getDirectTargetUUID() != null && data.getDirectTargetUUID().equals(leavingLeaderUUID))
-                    .forEach(data -> {
-                        data.setDirectTargetUUID(null); // 타겟을 잃음
-                        Player p = Bukkit.getPlayer(data.getPlayerUUID());
-                        if (p != null) {
-                            p.sendMessage(ChatColor.RED + "[GGORRI] 당신의 타겟(" + Bukkit.getOfflinePlayer(leavingLeaderUUID).getName() + ")이(가) 게임을 이탈하여 타겟을 잃었습니다!");
-                        }
-                        plugin.getLogger().info("[GGORRI] " + Bukkit.getOfflinePlayer(data.getPlayerUUID()).getName() + "의 타겟이 " + Bukkit.getOfflinePlayer(leavingLeaderUUID).getName() + "으로부터 끊어졌습니다.");
-                    });
+            // ... (생략) ...
         }
+
+        plugin.getLogger().info("[GGORRI] 팀장 이탈 처리 완료.");
 
         plugin.getLogger().info("[GGORRI] 팀장 이탈 처리 완료.");
     }

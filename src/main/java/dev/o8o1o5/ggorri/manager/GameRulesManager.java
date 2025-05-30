@@ -134,6 +134,8 @@ public class GameRulesManager {
         PlayerGameData deadPlayerData = playerManager.getPlayerGameData(deadUUID);
         if (deadPlayerData != null) {
             deadPlayerData.setRole(PlayerRole.SLAVE);
+            // !!! 수정: 노예가 된 플레이어에게 마스터 UUID 설정 !!!
+            deadPlayerData.setMasterUUID(killerUUID); // <-- 이 줄이 새로 추가되었습니다!
             deadPlayerData.setDirectTargetUUID(null); // 노예는 이제 타겟 없음
             Bukkit.broadcastMessage(ChatColor.YELLOW + "§l" + killer.getName() + "님이 잘못된 타겟인 " + deadPlayer.getName() + "을(를) 처치했습니다!");
             Bukkit.broadcastMessage(ChatColor.YELLOW + deadPlayer.getName() + "님은 이제 " + killer.getName() + "님의 노예가 됩니다.");
@@ -199,7 +201,7 @@ public class GameRulesManager {
             if (teamLeaderUUID != null) {
                 Player teamLeader = plugin.getServer().getPlayer(teamLeaderUUID);
                 if (teamLeader != null && teamLeader.isOnline()) {
-                    spawnLoc = spawnManager.findSafeSpawnLocation(teamLeader.getLocation().getWorld(), teamLeader.getLocation().getBlockX(), teamLeader.getLocation().getBlockZ(), 500, 100); // 팀장 근처 500블록 내에서 스폰
+                    spawnLoc = spawnManager.findSafeSpawnLocation(teamLeader.getLocation(), 100, 10);
                     if (spawnLoc == null) {
                         plugin.getLogger().warning("[GGORRI] " + player.getName() + " (노예)를 위한 팀장 근처 안전 스폰 위치를 찾지 못했습니다. 일반 스폰으로 이동합니다.");
                     }
@@ -208,7 +210,7 @@ public class GameRulesManager {
         }
 
         if (spawnLoc == null) {
-            spawnLoc = spawnManager.findSafeSpawnLocation(spawnManager.getGameWorld(), 100);
+            spawnLoc = spawnManager.findSafeSpawnLocation(spawnManager.getGameWorld(), spawnManager.getWorldBorderSize(), 100);
             if (spawnLoc == null) {
                 plugin.getLogger().warning("[GGORRI] 플레이어 " + player.getName() + "를 위한 안전한 부활 위치를 찾지 못했습니다. 월드 스폰으로 이동합니다.");
                 player.sendMessage(ChatColor.RED + "[GGORRI] 안전한 부활 위치를 찾지 못해 월드 스폰으로 이동합니다.");
@@ -231,35 +233,29 @@ public class GameRulesManager {
     // 현재는 모든 리더를 역추적하여 이 노예의 팀장이 누구인지 '고리'를 따라 찾아야 합니다.
     // 이는 매우 비효율적이고 복잡하므로, PlayerGameData에 teamLeaderUUID를 추가하는 것을 강력히 권장합니다.
     private UUID findTeamLeaderForSlave(UUID slaveUUID) {
-        // 임시 로직: 현재는 PlayerGameData에 팀장 UUID가 없으므로, 모든 리더를 순회하며
-        // 해당 리더의 고리 안에 이 슬레이브가 있는지 찾아야 합니다.
-        // 이 로직은 매우 비효율적이므로 PlayerGameData에 teamLeaderUUID를 추가하는 것이 필수적입니다.
+        // !!! 수정: masterUUID 필드를 활용하도록 로직 간소화 !!!
+        PlayerGameData slaveData = playerManager.getPlayerGameData(slaveUUID);
+        if (slaveData == null) {
+            plugin.getLogger().warning("[GGORRI] 노예(" + plugin.getServer().getOfflinePlayer(slaveUUID).getName() + ")의 게임 데이터를 찾을 수 없습니다.");
+            return null;
+        }
 
-        for (PlayerGameData leaderData : playerManager.getAllPlayersGameData().values().stream()
-                .filter(data -> data.getRole() == PlayerRole.LEADER)
-                .collect(Collectors.toList())) {
-            UUID current = leaderData.getPlayerUUID();
-            UUID startTarget = leaderData.getDirectTargetUUID();
-            if (startTarget == null) continue; // 고리가 없는 리더는 무시
-
-            // 최대 N번 순회 (게임 참여자 수만큼)하여 고리 안에 slaveUUID가 있는지 확인
-            UUID next = startTarget;
-            for (int i = 0; i < playerManager.getAllPlayersGameData().size(); i++) {
-                if (next.equals(slaveUUID)) {
-                    return leaderData.getPlayerUUID(); // 이 리더가 slaveUUID의 팀장
-                }
-                PlayerGameData nextData = playerManager.getPlayerGameData(next);
-                if (nextData == null || nextData.getDirectTargetUUID() == null || nextData.getRole() == PlayerRole.SLAVE) {
-                    break; // 고리가 끊어지거나 노예를 만나면 중단
-                }
-                next = nextData.getDirectTargetUUID();
-                if (next.equals(current)) { // 고리가 순환하여 다시 시작 지점으로 돌아오면
-                    break;
-                }
+        if (slaveData.getRole() == PlayerRole.LEADER) {
+            // 스스로 리더인 경우, 자신의 UUID를 반환 (자기 자신이 팀장)
+            return slaveUUID;
+        } else if (slaveData.getRole() == PlayerRole.SLAVE) {
+            // 노예인 경우, masterUUID를 반환
+            if (slaveData.getMasterUUID() != null) {
+                return slaveData.getMasterUUID();
+            } else {
+                plugin.getLogger().warning("[GGORRI] 노예(" + plugin.getServer().getOfflinePlayer(slaveUUID).getName() + ")의 masterUUID가 설정되지 않았습니다. (오류 가능성)");
+                // masterUUID가 없으면, 기존의 고리 탐색 로직을 대체할 방안이 필요합니다.
+                // 현재는 이 시나리오가 발생하지 않도록 위에서 masterUUID를 확실히 설정했습니다.
+                // 따라서 이 부분은 사실상 도달하지 않거나, 초기 설정 오류 시에만 발생합니다.
+                return null;
             }
         }
-        plugin.getLogger().warning("[GGORRI] 노예(" + plugin.getServer().getOfflinePlayer(slaveUUID).getName() + ")의 팀장을 찾을 수 없습니다.");
-        return null;
+        return null; // 알 수 없는 역할
     }
 
     /**

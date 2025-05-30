@@ -22,21 +22,19 @@ public class GameManager {
     private final PlayerManager playerManager;
     private final SpawnManager spawnManager;
     private final ChainManager chainManager;
+    private final GameRulesManager gameRulesManager;
 
-    private final Random random;
     private World gameWorld;
-
-    private static final double INITIAL_BORDER_SIZE = 3200.0; // 초기 월드 보더 크기
 
     public GameManager(GGORRI plugin) {
         this.plugin = plugin;
         this.currentStatus = GameStatus.WAITING;
         this.playersInGame = new HashMap<>();
-        this.random = new Random();
 
         this.playerManager = new PlayerManager(plugin, playersInGame);
         this.spawnManager = new SpawnManager(plugin);
         this.chainManager = new ChainManager(plugin, playersInGame);
+        this.gameRulesManager = new GameRulesManager(plugin, this, playerManager, spawnManager, chainManager);
 
         this.gameWorld = plugin.getServer().getWorld("world");
         if (this.gameWorld == null) {
@@ -205,7 +203,7 @@ public class GameManager {
             return;
         }
 
-        Location spawnLoc = spawnManager.findSafeSpawnLocation(gameWorld, 100);
+        Location spawnLoc = spawnManager.findSafeSpawnLocation(gameWorld, spawnManager.getWorldBorderSize() ,100);
         if (spawnLoc == null) {
             plugin.getLogger().warning("[GGORRI] 플레이어 " + player.getName() + "를 위한 안전한 부활 위치를 찾지 못했습니다. 월드 스폰으로 이동합니다.");
             player.sendMessage(ChatColor.RED + "[GGORRI] 안전한 부활 위치를 찾지 못해 월드 스폰으로 이동합니다.");
@@ -354,5 +352,9 @@ public class GameManager {
 
     public PlayerManager getPlayerManager() {
         return playerManager;
+    }
+
+    public ChainManager getChainManager() {
+        return chainManager;
     }
 }

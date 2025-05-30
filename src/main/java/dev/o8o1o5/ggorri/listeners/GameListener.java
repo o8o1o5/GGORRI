@@ -3,6 +3,7 @@ package dev.o8o1o5.ggorri.listeners;
 import dev.o8o1o5.ggorri.GGORRI;
 import dev.o8o1o5.ggorri.game.PlayerGameData;
 import dev.o8o1o5.ggorri.manager.GameManager;
+import dev.o8o1o5.ggorri.manager.PlayerManager;
 import org.bukkit.ChatColor;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -47,7 +48,7 @@ public class GameListener implements Listener {
         UUID victimUUID = victim.getUniqueId();
 
         // 게임 진행 중인 플레이어만 처리
-        if (!gameManager.getAllPlayersGameData().containsKey(victimUUID)) {
+        if (!gameManager.getPlayerManager().getAllPlayersGameData().containsKey(victimUUID)) {
             return;
         }
 
@@ -62,7 +63,7 @@ public class GameListener implements Listener {
         }
 
         // 3. 사망 판정 및 처리
-        if (killerUUID != null && gameManager.getAllPlayersGameData().containsKey(killerUUID)) {
+        if (killerUUID != null && gameManager.getPlayerManager().getAllPlayersGameData().containsKey(killerUUID)) {
             // PvP 사망
             Player killer = plugin.getServer().getPlayer(killerUUID);
             if (killer != null) {
@@ -83,7 +84,7 @@ public class GameListener implements Listener {
                 if (killerData.getDirectTargetUUID() != null && killerData.getDirectTargetUUID().equals(victimUUID)) {
                     // 정상 처치 (킬러가 죽은 플레이어의 직계 타겟)
                     plugin.getServer().broadcastMessage(ChatColor.GREEN + "[GGORRI] " + killer.getName() + "님이 자신의 타겟 " + victim.getName() + "님을 처치했습니다!");
-                    gameManager.enslavePlayerAndAdjustTargets(killerUUID, victimUUID);
+                    gameManager.getChainManager().enslavePlayerAndAdjustTarget(killerUUID, victimUUID);
                     killer.sendMessage(ChatColor.AQUA + "[GGORRI] 타겟을 처치했습니다!");
                 } else {
                     plugin.getServer().broadcastMessage(ChatColor.RED + "[GGORRI] " + killer.getName() + "님이 잘못된 타겟인 " + victim.getName() + "님을 처치했습니다!");

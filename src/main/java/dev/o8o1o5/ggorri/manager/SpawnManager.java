@@ -250,4 +250,8 @@ public class SpawnManager {
     public World getGameWorld() {
         return gameWorld;
     }
+
+    public int getWorldBorderSize() {
+        return (int) INITIAL_BORDER_SIZE;
+    }
 }
