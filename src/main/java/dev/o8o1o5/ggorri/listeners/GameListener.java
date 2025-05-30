@@ -36,8 +36,7 @@ public class GameListener implements Listener {
             // TODO: 팀킬 방지 등.. etc. (현재는 모두 기록)
 
             // 플레이어 간 데미지 발생 시 기록
-            gameManager.recordPlayerDamage(attacker.getUniqueId(), victim.getUniqueId());
-            plugin.getLogger().log(Level.FINE, "[GGORRI Debug] PvP 데미지 기록: " + attacker.getName() + " -> " + victim.getName());
+            gameManager.getPlayerManager().recordPlayerDamage(attacker.getUniqueId(), victim.getUniqueId());
         }
     }
 
@@ -59,7 +58,7 @@ public class GameListener implements Listener {
         // 2. PvP 사망 여부 및 공격자 확인
         if (cause == DamageCause.ENTITY_ATTACK || cause == DamageCause.PROJECTILE) {
             // 마지막 공격자를 GameManager에서 조회
-            killerUUID = gameManager.getLastAttacker(victimUUID);
+            killerUUID = gameManager.getPlayerManager().getLastAttacker(victimUUID);
         }
 
         // 3. 사망 판정 및 처리
@@ -67,14 +66,14 @@ public class GameListener implements Listener {
             // PvP 사망
             Player killer = plugin.getServer().getPlayer(killerUUID);
             if (killer != null) {
-                PlayerGameData victimData = gameManager.getPlayerGameData(victimUUID);
-                PlayerGameData killerData = gameManager.getPlayerGameData(killerUUID);
+                PlayerGameData victimData = gameManager.getPlayerManager().getPlayerGameData(victimUUID);
+                PlayerGameData killerData = gameManager.getPlayerManager().getPlayerGameData(killerUUID);
 
                 if (victimData == null || killerData == null) {
                     plugin.getLogger().warning("[GGORRI] 사망 또는 공격 플레이어의 게임 데이터가 없습니다: Victim=" + victim.getName() + ", Killer=" + killer.getName());
                     // 데이터 없는 경우 자연사 처리 (임시)
                     handleNaturalDeath(victim);
-                    gameManager.clearDamageRecordsForPlayer(victimUUID);
+                    gameManager.getPlayerManager().clearDamageRecordsForPlayer(victimUUID);
                     return;
                 }
 
@@ -102,7 +101,7 @@ public class GameListener implements Listener {
         }
 
         // 사망한 플레이어의 데미지 기록 정리
-        gameManager.clearDamageRecordsForPlayer(victimUUID);
+        gameManager.getPlayerManager().clearDamageRecordsForPlayer(victimUUID);
 
         // 기본 사망 메시지 제거 (옵션)
         event.setDeathMessage(null);
@@ -116,7 +115,7 @@ public class GameListener implements Listener {
         // TODO: 2.1단계에서 부활 시스템 구현 시 여기에 로직 추가
         player.sendMessage(ChatColor.YELLOW + "[GGORRI] 당신은 자연사했습니다.");
 
-        PlayerGameData data = gameManager.getPlayerGameData(player.getUniqueId());
+        PlayerGameData data = gameManager.getPlayerManager().getPlayerGameData(player.getUniqueId());
         if (data != null) {
             data.incrementDeathCount(); // 사망 횟수 증가
             plugin.getLogger().info("[GGORRI] " + player.getName() + "님의 사망 횟수: " + data.getDeathCount());
