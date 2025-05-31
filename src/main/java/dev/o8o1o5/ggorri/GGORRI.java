@@ -35,8 +35,6 @@ public final class GGORRI extends JavaPlugin {
             getLogger().warning("[GGORRI] 명령어 'ggorri'를 찾을 수 없습니다! plugin.yml을 확인해주세요.");
         }
 
-        getServer().getPluginManager().registerEvents(new GameListener(this, gameManager), this);
-
         getLogger().info("[GGORRI] 모든 초기 설정이 완료되었습니다.");
     }
 

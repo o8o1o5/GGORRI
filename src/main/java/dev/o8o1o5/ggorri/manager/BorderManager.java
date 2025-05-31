@@ -82,22 +82,10 @@ public class BorderManager {
 
     // 1-2. 자기장 시스템 전체 시작
     public void startBorderSystem() {
-        // 실행 중인 태스크 모두 중지
-        stopBorderSystem();
+        plugin.getLogger().info("[GGORRI] startBorderSystem() 호출됨. 자기장 시스템 시작 시도.");
+        stopBorderSystem(); // 기존 태스크 중지
 
-        //setupInitialBorder();
-
-        // 9분 후 첫 자기장 수축 준비 공지를 시작하는 스케줄러
-        // 9분 후 첫 실행, 이후 10분마다 실행
-        borderAnnouncementTask = new BukkitRunnable() {
-            @Override
-            public void run() {
-                prepareNextBorderPhase();
-            }
-        }.runTaskTimer(plugin, ANNOUNCEMENT_INTERVAL_TICKS, ANNOUNCEMENT_INTERVAL_TICKS);
-
-        // 자기장 외부 플레이어에게 데미지를 주기적으로 적용하는 스케줄러
-        // 게임 시작과 동시에 데미지 적용을 시작
+        // 자기장 외부 플레이어에게 데미지를 주기적으로 적용하는 스케줄러는 게임 시작과 동시에 시작
         borderDamageTask = new BukkitRunnable() {
             @Override
             public void run() {
@@ -105,7 +93,25 @@ public class BorderManager {
             }
         }.runTaskTimer(plugin, 0L, DAMAGE_INTERVAL_TICKS);
 
-        plugin.getLogger().info("[GGORRI] 자기장 시스템이 시작되었습니다.");
+        // 첫 자기장 수축 준비 공지는 게임 시작 후 10분 뒤에 나오도록 예약
+        // 10분 = (9분 대기 + 1분 수축) 이후의 첫 공지
+        // 즉, 첫 공지는 게임 시작 후 10분 시점에, 그 다음 공지는 10분 간격으로
+        // initial delay: 10분 * 20 틱 = 12000 틱
+        // period: 10분 * 20 틱 = 12000 틱
+
+        // 첫 자기장 공지 (10분 시점)를 예약하고, 이후 주기적으로 호출되도록 수정
+        // 이 스케줄러가 prepareNextBorderPhase()를 호출합니다.
+        borderAnnouncementTask = new BukkitRunnable() {
+            @Override
+            public void run() {
+                plugin.getLogger().info("[GGORRI] borderAnnouncementTask 실행됨. prepareNextBorderPhase() 호출 시도.");
+                prepareNextBorderPhase();
+            }
+        }.runTaskTimer(plugin, (ANNOUNCEMENT_INTERVAL_TICKS + SHRINK_DURATION_TICKS), (ANNOUNCEMENT_INTERVAL_TICKS + SHRINK_DURATION_TICKS));
+        //                           ^ 첫 공지 시점 = 9분 대기 + 1분 수축 시간 (즉 10분 후)
+        //                                                      ^ 이후 주기 = 9분 대기 + 1분 수축 시간 (즉 10분마다)
+
+        plugin.getLogger().info("[GGORRI] 자기장 시스템이 시작되었습니다. 첫 자기장 경고는 " + ((ANNOUNCEMENT_INTERVAL_TICKS + SHRINK_DURATION_TICKS) / 20 / 60) + "분 뒤에 나옵니다.");
     }
 
     // 1-3. 자기장 시스템 전체 중지
@@ -173,37 +179,52 @@ public class BorderManager {
             borderShrinkEffectTask = null;
         }
 
+        // --- 카운트다운 스케줄러 ---
         borderShrinkEffectTask = new BukkitRunnable() {
             @Override
             public void run() {
-                // 카운트다운 종료 시
+                // 카운트다운 종료 시 (1분 경고 시간이 끝났을 때)
                 if (countdownSeconds <= 0) {
-                    this.cancel(); // 현재 스케줄러 중지
+                    this.cancel(); // 현재 카운트다운 스케줄러 중지
 
                     // 실제 월드 보더 수축 시작 (1분간)
                     gameBorder.setCenter(nextBorderCenter);
-                    gameBorder.setSize(nextBorderSize, SHRINK_DURATION_TICKS);
+                    gameBorder.setSize(nextBorderSize, SHRINK_DURATION_TICKS / 20); // Minecraft API는 초 단위
                     plugin.getServer().broadcastMessage(ChatColor.RED + "[GGORRI] 자기장이 수축하기 시작합니다!");
                     plugin.getLogger().info("[GGORRI] 자기장 " + (borderPhase + 1) + "단계 수축 시작. 중심: " + nextBorderCenter.getBlockX() + ", " + nextBorderCenter.getBlockZ() + ", 크기: " + nextBorderSize);
 
-                    // 현재 자기장 정보 업데이트 (다음 페이즈를 위해)
+                    // 현재 자기장 정보 업데이트
                     currentBorderCenter = nextBorderCenter;
                     currentBorderSize = nextBorderSize;
                     borderPhase++; // 다음 페이즈로 전환
 
-                    // 다음 자기장 수축을 위한 메인 타이머를 다시 시작합니다.
-                    // (즉, 9분 후 prepareNextBorderPhase()가 다시 호출되도록)
-                    if (borderAnnouncementTask != null) {
-                        borderAnnouncementTask.cancel(); // 기존 공지 태스크 취소 후 새로 시작하여 정확한 10분 간격 유지
-                    }
-                    borderAnnouncementTask = new BukkitRunnable() {
+                    // **[핵심 변경]** 자기장 수축이 완료될 시점 (SHRINK_DURATION_TICKS 후)에
+                    // 다음 prepareNextBorderPhase()를 호출하도록 예약
+                    // 이전에 borderAnnouncementTask가 매 주기마다 자신을 반복했으나, 이제는 수축 완료 후 다음 주기를 예약
+                    // 이 로직은 borderAnnouncementTask의 initial delay 및 period와 일치해야 합니다.
+                    // 즉, 자기장 수축이 시작되고 1분 뒤에 수축이 완료되므로,
+                    // 완료된 그 시점부터 다음 공지까지 9분을 기다려야 합니다.
+                    new BukkitRunnable() {
                         @Override
                         public void run() {
-                            prepareNextBorderPhase();
-                        }
-                    }.runTaskTimer(plugin, ANNOUNCEMENT_INTERVAL_TICKS, ANNOUNCEMENT_INTERVAL_TICKS);
+                            // 여기서는 prepareNextBorderPhase()를 직접 호출하는 대신,
+                            // borderAnnouncementTask가 다음 주기에 호출될 수 있도록 대기합니다.
+                            // borderAnnouncementTask의 period가 (ANNOUNCEMENT_INTERVAL_TICKS + SHRINK_DURATION_TICKS)로 설정되어 있으므로,
+                            // 이 Runnable은 단순히 수축이 완료되었음을 확인하는 역할만 하고,
+                            // 다음 공지는 main borderAnnouncementTask에 의해 자동으로 처리됩니다.
+                            plugin.getLogger().info("[GGORRI] 자기장 " + borderPhase + "단계 수축이 완료되었습니다.");
+                            plugin.getServer().broadcastMessage(ChatColor.AQUA + "[GGORRI] 자기장 수축이 완료되었습니다!");
 
-                    return;
+                            // 만약 여기에 다음 자기장 공지를 바로 하고 싶다면 prepareNextBorderPhase()를 호출하면 됩니다.
+                            // 하지만 요구사항은 "줄어들고 난 뒤 바로 다음 자기장 경고"가 아니라
+                            // "줄어들고 난 뒤 (즉시) 다음 자기장 경고" -> (9분 대기) -> "1분간 수축"
+                            // 이므로, 첫 공지 시점과 주기성을 borderAnnouncementTask에 맡기는 것이 일관성 있습니다.
+                            // 즉, 이 위치에서는 다음 공지를 예약하는 것이 아니라, 수축이 완료되었다는 메시지를 내보내고,
+                            // 메인 borderAnnouncementTask가 다음 주기를 기다리는 것이 맞습니다.
+                        }
+                    }.runTaskLater(plugin, SHRINK_DURATION_TICKS); // 수축이 완료되는 1분 후 실행
+
+                    return; // 카운트다운 스케줄러는 종료
                 }
 
                 // --- 액션바 카운트다운 메시지를 직접 보내지 않고 ActionBarManager에 요청 ---
@@ -219,7 +240,7 @@ public class BorderManager {
 
                 countdownSeconds--;
             }
-        }.runTaskTimer(plugin, 0L, 20L);
+        }.runTaskTimer(plugin, 0L, 20L); // 0초 지연, 1초마다 반복
     }
 
     public void applyBorderDamageAndWarnings() {

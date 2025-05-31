@@ -102,6 +102,11 @@ public class PlayerManager {
         return lastAttacker;
     }
 
+    public void clearLastAttackers() {
+        this.playerDamageTracker.clear();
+        plugin.getLogger().log(Level.INFO, "[GGORRI] 모든 플레이어의 데미지 기록이 초기화되었습니다.");
+    }
+
     /**
      * 플레이어 사망 시 데미지 기록을 정리합니다.
      * @param playerUUID 사망한 플레이어의 UUID

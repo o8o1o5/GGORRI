@@ -5,6 +5,7 @@ import dev.o8o1o5.ggorri.game.PlayerGameData;
 import dev.o8o1o5.ggorri.game.PlayerRole;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
+import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
@@ -13,10 +14,7 @@ import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import org.bukkit.scheduler.BukkitRunnable;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
+import java.util.*;
 import java.util.logging.Level;
 import java.util.stream.Collectors;
 
@@ -145,30 +143,37 @@ public class GameRulesManager {
             @Override
             public void run() {
                 Player player = plugin.getServer().getPlayer(playerUUID);
-                if (player != null && playerManager.getAllPlayersGameData().containsKey(playerUUID)) {
+                // 플레이어가 온라인이고, 아직 게임에 참여 중인 경우에만 부활 처리
+                if (player != null && player.isOnline() && playerManager.getAllPlayersGameData().containsKey(playerUUID)) {
                     respawnPlayer(player, spawnNearTeamLeader);
-                } else if (player != null) {
+
+                    // 부활 후 액션바 메시지 다시 활성화
+                    // BorderManager.applyBorderDamageAndWarnings가 매 1초마다 액션바 메시지를 보내므로 별도로 활성화할 필요가 없을 수 있습니다.
+                    // 단, 사망 직전에 강제로 메시지를 지웠다면, BorderManager가 다음 틱에 다시 해당 메시지를 보내줄 것입니다.
+                    // 필요하다면, 여기에 직접 "안전합니다" 메시지를 한 번 보내는 코드를 추가할 수 있습니다.
+                    // gameManager.getActionBarManager().setMessage(player.getUniqueId(), ActionBarManager.PRIORITY_BORDER_INSIDE, ChatColor.GREEN + "✅ 다음 자기장 내부에 있습니다. 안전합니다!");
+                } else if (player != null && player.isOnline()) {
+                    // 게임에서 나갔지만 온라인 상태라면 (예: /ggorri leave 후 사망 타이머 만료)
+                    // 기본 리스폰을 통해 로비 등으로 이동하도록 합니다.
                     player.spigot().respawn();
+                    // 이때는 PlayerManager.removePlayerFromGame(player)도 호출되어야 합니다.
+                    // 이는 GameManager.leaveGame()에서 이미 처리되므로 여기서는 중복 호출하지 않습니다.
                 }
             }
         }.runTaskLater(plugin, delayTicks);
     }
 
-    /**
-     * 실제 플레이어를 부활시키는 로직.
-     * 안전한 스폰 위치로 텔레포트하고, 게임 모드를 변경하며, 상태를 초기화하고 무적 효과를 부여합니다.
-     * @param player 부활시킬 플레이어
-     * @param spawnNearTeamLeader 팀장 근처에서 부활할지 여부
-     */
     private void respawnPlayer(Player player, boolean spawnNearTeamLeader) {
         PlayerGameData playerData = playerManager.getPlayerGameData(player.getUniqueId());
         if (playerData == null) {
             plugin.getLogger().warning("[GGORRI] 부활하려는 플레이어(" + player.getName() + ")의 게임 데이터가 없습니다.");
+            // 플레이어가 게임 데이터에 없으면 일반 리스폰 처리 (로비 등으로 이동)
             player.spigot().respawn();
             return;
         }
 
-        player.spigot().respawn();
+        // 플레이어의 게임 모드를 SURVIVAL로 변경 (스펙테이터 -> 서바이벌)
+        player.setGameMode(GameMode.SURVIVAL);
 
         Location spawnLoc = null;
 
@@ -195,22 +200,23 @@ public class GameRulesManager {
         }
 
         if (spawnLoc == null) {
+            // 전역 스폰 위치 찾기
             spawnLoc = spawnManager.findSafeSpawnLocation(spawnManager.getGameWorld(), (int)spawnManager.getGameWorld().getWorldBorder().getSize(), 100);
             if (spawnLoc == null) {
                 plugin.getLogger().warning("[GGORRI] 플레이어 " + player.getName() + "를 위한 안전한 부활 위치를 찾지 못했습니다. 월드 스폰으로 이동합니다.");
                 player.sendMessage(ChatColor.RED + "[GGORRI] 안전한 부활 위치를 찾지 못해 월드 스폰으로 이동합니다.");
-                spawnLoc = spawnManager.getGameWorld().getSpawnLocation();
+                spawnLoc = spawnManager.getGameWorld().getSpawnLocation(); // 최종 fallback
             } else {
                 player.sendMessage(ChatColor.GREEN + "[GGORRI] 일반 스폰 지점에서 부활했습니다!");
             }
         }
 
-        playerManager.resetPlayer(player);
+        playerManager.resetPlayer(player); // 인벤토리, 체력, 게임모드 등 초기화
         player.teleport(spawnLoc);
         player.sendMessage("[GGORRI] 부활했습니다! 다시 꼬리를 쫓으세요!");
 
-        player.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, 20 * 5, 255, false, false));
-        player.addPotionEffect(new PotionEffect(PotionEffectType.FIRE_RESISTANCE, 20 * 5, 0, false, false));
+        player.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, 20 * 5, 255, false, false)); // 5초 무적
+        player.addPotionEffect(new PotionEffect(PotionEffectType.FIRE_RESISTANCE, 20 * 5, 0, false, false)); // 5초 화염 저항
 
         plugin.getLogger().info("[GGORRI] " + player.getName() + "님이 " + spawnLoc.getBlockX() + ", " + spawnLoc.getBlockY() + ", " + spawnLoc.getBlockZ() + "로 부활했습니다.");
     }
@@ -248,15 +254,20 @@ public class GameRulesManager {
      */
     public UUID checkWinCondition() {
         if (gameManager.getCurrentStatus() != GameManager.GameStatus.IN_GAME) {
-            return null; // 게임 중이 아니면 승리 조건 확인하지 않음
+            plugin.getLogger().log(Level.FINE, "[GGORRI] checkWinCondition: 게임 중이 아님. 현재 상태: " + gameManager.getCurrentStatus());
+            return null;
         }
 
         Map<UUID, PlayerGameData> activePlayers = playerManager.getAllPlayersGameData().entrySet().stream()
                 .filter(entry -> plugin.getServer().getPlayer(entry.getKey()) != null && plugin.getServer().getPlayer(entry.getKey()).isOnline())
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
 
+        plugin.getLogger().info("[GGORRI] checkWinCondition: 현재 활성 플레이어 수: " + activePlayers.size());
+        activePlayers.forEach((uuid, data) -> plugin.getLogger().info(" - " + plugin.getServer().getOfflinePlayer(uuid).getName() + " (역할: " + data.getRole() + ", 마스터: " + (data.getMasterUUID() != null ? plugin.getServer().getOfflinePlayer(data.getMasterUUID()).getName() : "없음") + ")"));
+
+
         if (activePlayers.isEmpty()) {
-            plugin.getLogger().info("[GGORRI] 모든 플레이어가 게임에서 이탈하여 강제 종료됩니다.");
+            plugin.getLogger().info("[GGORRI] checkWinCondition: 모든 플레이어가 게임에서 이탈하여 강제 종료됩니다.");
             endGame(null); // 모든 플레이어가 나가면 강제 종료
             return null;
         }
@@ -266,13 +277,21 @@ public class GameRulesManager {
                 .map(Map.Entry::getKey)
                 .collect(Collectors.toList());
 
+        plugin.getLogger().info("[GGORRI] checkWinCondition: 현재 LEADER 수: " + leaders.size());
+        leaders.forEach(uuid -> plugin.getLogger().info(" - 리더: " + plugin.getServer().getOfflinePlayer(uuid).getName()));
+
         // 승리 조건: 리더가 1명만 남았을 때
         if (leaders.size() == 1) {
             UUID winningLeaderUUID = leaders.get(0);
+            plugin.getLogger().info("[GGORRI] checkWinCondition: 리더가 한 명만 남았습니다: " + plugin.getServer().getOfflinePlayer(winningLeaderUUID).getName());
 
             // 이 리더를 제외한 모든 게임 내 플레이어가 SLAVE인지 확인
+            // (즉, 모든 플레이어가 winningLeaderUUID를 마스터로 가지거나, 자기 자신이 winningLeaderUUID인 경우)
             boolean allOthersAreSlaves = activePlayers.values().stream()
-                    .allMatch(data -> data.getRole() == PlayerRole.SLAVE || data.getPlayerUUID().equals(winningLeaderUUID));
+                    .allMatch(data -> data.getPlayerUUID().equals(winningLeaderUUID) || // 자기 자신이 리더인 경우
+                            (data.getRole() == PlayerRole.SLAVE && Objects.equals(data.getMasterUUID(), winningLeaderUUID))); // 또는 그 리더의 노예인 경우
+
+            plugin.getLogger().info("[GGORRI] checkWinCondition: 모든 다른 플레이어가 노예인지 여부: " + allOthersAreSlaves);
 
             if (allOthersAreSlaves) {
                 plugin.getLogger().info("[GGORRI] 승리 조건 충족! 승리한 팀장: " + plugin.getServer().getOfflinePlayer(winningLeaderUUID).getName());
@@ -284,12 +303,12 @@ public class GameRulesManager {
         // 추가: 혼자 남은 경우도 승리
         if (activePlayers.size() == 1 && leaders.size() == 1) {
             UUID soleSurvivorUUID = leaders.get(0);
-            plugin.getLogger().info("[GGORRI] 마지막 플레이어가 생존하여 승리했습니다: " + plugin.getServer().getOfflinePlayer(soleSurvivorUUID).getName());
+            plugin.getLogger().info("[GGORRI] checkWinCondition: 마지막 플레이어가 생존하여 승리했습니다: " + plugin.getServer().getOfflinePlayer(soleSurvivorUUID).getName());
             endGame(soleSurvivorUUID);
             return soleSurvivorUUID;
         }
 
-        plugin.getLogger().log(Level.FINE, "[GGORRI] 현재 LEADER 수: " + leaders.size() + ", 게임 내 플레이어 수: " + activePlayers.size());
+        plugin.getLogger().log(Level.FINE, "[GGORRI] 현재 LEADER 수: " + leaders.size() + ", 게임 내 플레이어 수: " + activePlayers.size() + ". 승리 조건 미충족.");
         return null; // 아직 승리 조건 미충족
     }
 

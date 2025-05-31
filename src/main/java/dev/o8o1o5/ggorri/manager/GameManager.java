@@ -3,11 +3,14 @@ package dev.o8o1o5.ggorri.manager;
 import dev.o8o1o5.ggorri.GGORRI;
 import dev.o8o1o5.ggorri.game.PlayerGameData;
 import dev.o8o1o5.ggorri.game.PlayerRole;
+import dev.o8o1o5.ggorri.listeners.GameListener;
 import org.bukkit.*;
 import org.bukkit.block.Block;
 import org.bukkit.block.data.type.Chain;
 import org.bukkit.entity.Player;
 import org.bukkit.potion.PotionEffectType; // PotionEffectType 임포트
+import org.bukkit.scheduler.BukkitRunnable;
+import org.bukkit.scheduler.BukkitTask;
 
 import javax.swing.*;
 import java.util.*;
@@ -17,247 +20,310 @@ import java.util.stream.Collectors;
 
 public class GameManager {
     private final GGORRI plugin;
-    public GameStatus currentStatus;
-    private final Map<UUID, PlayerGameData> playersInGame;
-
     private final PlayerManager playerManager;
     private final SpawnManager spawnManager;
     private final ChainManager chainManager;
     private final GameRulesManager gameRulesManager;
-    private final ActionBarManager actionBarManager;
     private final BorderManager borderManager;
+    private final ActionBarManager actionBarManager;
 
-    private World gameWorld;
+    public Map<UUID, PlayerGameData> playersInGame; // 모든 매니저가 공유
+
+    public GameStatus currentStatus;
+
+    private BukkitTask gameStartCountdownTask;
+    private BukkitTask winConditionCheckTask; // 추가: 승리 조건 주기적 확인 태스크
+
+    private static final int MIN_PLAYERS = 2;
+    private static final int MAX_PLAYERS = 10;
 
     public GameManager(GGORRI plugin) {
         this.plugin = plugin;
-        this.currentStatus = GameStatus.WAITING;
-        this.playersInGame = new HashMap<>();
-
+        this.playersInGame = new ConcurrentHashMap<>(); // ConcurrentHashMap 사용
         this.playerManager = new PlayerManager(plugin, playersInGame);
         this.spawnManager = new SpawnManager(plugin);
-        this.chainManager = new ChainManager(plugin, playersInGame);
         this.actionBarManager = new ActionBarManager(plugin);
-        this.borderManager = new BorderManager(plugin, actionBarManager, playersInGame);
+        this.borderManager = new BorderManager(plugin, actionBarManager, playersInGame); // BorderManager에 playersInGame 전달
+        this.chainManager = new ChainManager(plugin, playersInGame);
         this.gameRulesManager = new GameRulesManager(plugin, this, playerManager, spawnManager, chainManager, borderManager);
 
-        this.gameWorld = plugin.getServer().getWorld("world");
-        if (this.gameWorld == null) {
-            plugin.getLogger().severe("[GGORRI] 게임 월드 'world'를 찾을 수 없습니다! 서버에 해당 월드가 존재하는지 확인해주세요.");
-        } else {
-            spawnManager.setupWorldBorder(gameWorld);
-        }
+        this.currentStatus = GameStatus.WAITING;
+
+        // 액션바 시스템 시작
+        actionBarManager.startDisplaying();
     }
 
     /**
      * indicating the current state of the game
      */
     public enum GameStatus {
-        WAITING,   // 게임 시작 대기 중
-        STARTING,  // 게임 시작 카운트다운 중 (옵션, 현재는 IN_GAME 직전 상태)
+        WAITING, // 게임 대기 중
+        COUNTDOWN, // 게임 시작 카운트다운 중
         IN_GAME,   // 게임 진행 중
-        ENDING     // 게임 종료 중
+        ENDING     // 게임 종료 처리 중
     }
 
     /**
-     * Engage the player in the game
-     * @param player class
-     * @return Successful participation
+     * 게임 시작 카운트다운을 시작합니다.
+     * @param seconds 카운트다운 시간
+     */
+    public void startCountdown(int seconds) {
+        if (currentStatus != GameStatus.WAITING) {
+            plugin.getLogger().warning("[GGORRI] 게임이 이미 시작되었거나 진행 중입니다. 카운트다운을 시작할 수 없습니다.");
+            return;
+        }
+
+        if (playersInGame.size() < 2) { // 최소 2명 이상이어야 게임 시작
+            plugin.getServer().broadcastMessage(ChatColor.RED + "[GGORRI] 게임 시작을 위해 최소 2명 이상의 플레이어가 필요합니다!");
+            return;
+        }
+
+        currentStatus = GameStatus.COUNTDOWN;
+        plugin.getServer().broadcastMessage(ChatColor.GREEN + "[GGORRI] 게임이 " + seconds + "초 후에 시작됩니다!");
+
+        gameStartCountdownTask = new BukkitRunnable() {
+            int countdown = seconds;
+
+            @Override
+            public void run() {
+                if (countdown <= 0) {
+                    startGame();
+                    this.cancel();
+                    return;
+                }
+
+                if (countdown <= 5 || countdown % 10 == 0) {
+                    plugin.getServer().broadcastMessage(ChatColor.YELLOW + "[GGORRI] 게임 시작까지 " + countdown + "초 남았습니다!");
+                }
+                countdown--;
+            }
+        }.runTaskTimer(plugin, 0L, 20L); // 1초마다 실행
+    }
+
+    /**
+     * 진행 중인 게임 시작 카운트다운을 취소합니다.
+     */
+    public void cancelCountdown() {
+        if (gameStartCountdownTask != null) {
+            gameStartCountdownTask.cancel();
+            gameStartCountdownTask = null;
+            plugin.getLogger().info("[GGORRI] 게임 시작 카운트다운이 취소되었습니다.");
+            if (currentStatus == GameStatus.COUNTDOWN) {
+                currentStatus = GameStatus.WAITING; // 카운트다운 취소 시 대기 상태로 전환
+            }
+        }
+    }
+
+
+    /**
+     * 플레이어를 게임에 참가시킵니다.
+     * @param player 게임에 참가할 플레이어
+     * @return 성공적으로 참가하면 true, 실패하면 false
      */
     public boolean joinGame(Player player) {
         if (currentStatus != GameStatus.WAITING) {
-            // 메시지는 Command Executor에서 처리
-            return false;
-        }
-        if (playersInGame.containsKey(player.getUniqueId())) {
-            // 메시지는 Command Executor에서 처리
+            player.sendMessage(ChatColor.RED + "[GGORRI] 게임이 이미 시작되었거나 진행 중입니다. 다음 게임을 기다려주세요.");
             return false;
         }
 
-        playersInGame.put(player.getUniqueId(), new PlayerGameData(player.getUniqueId()));
+        if (playersInGame.containsKey(player.getUniqueId())) {
+            player.sendMessage(ChatColor.YELLOW + "[GGORRI] 이미 게임에 참가 중입니다.");
+            return false;
+        }
+
+        if (playersInGame.size() >= MAX_PLAYERS) {
+            player.sendMessage(ChatColor.RED + "[GGORRI] 게임이 가득 찼습니다! (최대 " + MAX_PLAYERS + "명)");
+            return false;
+        }
+
+        playerManager.addPlayerToGame(player); // PlayerManager를 통해 데이터 추가
+        playerManager.resetPlayer(player); // 참가 시 플레이어 상태 초기화
+        player.setGameMode(GameMode.ADVENTURE); // 대기 중에는 어드벤처 모드
+        player.teleport(spawnManager.getGameWorld().getSpawnLocation()); // 로비 스폰 위치로 이동
+
+        // 성공 메시지는 GGORRICommand에서 보냄
         plugin.getLogger().info("[GGORRI] " + player.getName() + "님이 게임에 참가했습니다. 현재 " + playersInGame.size() + "명.");
-        return true;
+        plugin.getServer().broadcastMessage(ChatColor.YELLOW + player.getName() + "님이 게임에 참가했습니다! (" + playersInGame.size() + "/" + MAX_PLAYERS + "명)");
+
+        // 최소 인원 충족 시 자동 카운트다운 시작 (만약 아직 시작되지 않았다면)
+        if (playersInGame.size() >= MIN_PLAYERS && currentStatus == GameStatus.WAITING && (gameStartCountdownTask == null || gameStartCountdownTask.isCancelled())) {
+            startCountdown(30); // 30초 카운트다운 시작
+        }
+
+        return true; // 성공적으로 참가
     }
 
+    /**
+     * 플레이어를 게임에서 퇴장시킵니다.
+     * @param player 게임에서 퇴장할 플레이어
+     * @return 성공적으로 퇴장하면 true, 실패하면 false
+     */
     public boolean leaveGame(Player player) {
         if (!playersInGame.containsKey(player.getUniqueId())) {
-            // 메시지는 Command Executor에서 처리
+            // "게임에 참가 중이 아닙니다." 메시지는 GGORRICommand에서 처리
             return false;
         }
 
-        // 게임 도중 나갈 경우 처리 (나중에 3단계: 플레이어 이탈 처리 로직에서 상세화)
-        if (currentStatus == GameStatus.IN_GAME) {
-            plugin.getLogger().warning("[GGORRI] " + player.getName() + "님이 게임 도중 이탈했습니다. (TODO: 페널티/고리 재설정)");
-            playersInGame.remove(player.getUniqueId());
-            playerManager.resetPlayer(player);
-            player.teleport(gameWorld.getSpawnLocation()); // 로비 스폰으로 돌려보냄
-            plugin.getServer().broadcastMessage(ChatColor.YELLOW + "[GGORRI] " + player.getName() + "님이 게임에서 퇴장했습니다.");
+        plugin.getLogger().info("[GGORRI] " + player.getName() + "님이 게임에서 퇴장 시도.");
 
-            checkWinCondition();
-            return true;
+        // 게임 중 이탈 시 패널티 및 처리
+        if (currentStatus == GameStatus.IN_GAME) {
+            // gameRulesManager.handlePlayerExit(player.getUniqueId()); // 게임 룰에 따른 이탈 처리 (사망 간주 등)
+            plugin.getLogger().info("[GGORRI] " + player.getName() + "님이 게임 도중 이탈했습니다.");
+        } else {
+            plugin.getLogger().info("[GGORRI] " + player.getName() + "님이 대기 중 게임에서 나갔습니다.");
         }
 
-        playersInGame.remove(player.getUniqueId());
-        plugin.getLogger().info("[GGORRI] " + player.getName() + "님이 게임에서 퇴장했습니다. 현재 " + playersInGame.size() + "명.");
-        return true;
+        // 플레이어 역할이 LEADER였고, 그에게 노예가 있었다면 ChainManager가 처리하도록
+        PlayerGameData leavingPlayerData = playerManager.getPlayerGameData(player.getUniqueId());
+        if (leavingPlayerData != null && leavingPlayerData.getRole() == PlayerRole.LEADER) {
+            chainManager.handleLeaderExit(player.getUniqueId());
+        }
+
+        playerManager.removePlayerFromGame(player); // PlayerManager를 통해 데이터 제거 및 상태 초기화
+        player.teleport(spawnManager.getGameWorld().getSpawnLocation()); // 로비 스폰 위치로 이동
+
+        // 성공 메시지는 GGORRICommand에서 보냄
+        plugin.getServer().broadcastMessage(ChatColor.YELLOW + player.getName() + "님이 게임에서 퇴장했습니다! (" + playersInGame.size() + "명 남음)");
+
+
+        // 플레이어 수 감소로 인해 게임 시작 카운트다운이 취소될 수 있음
+        if (playersInGame.size() < MIN_PLAYERS && currentStatus == GameStatus.COUNTDOWN) {
+            cancelCountdown();
+            plugin.getServer().broadcastMessage(ChatColor.RED + "[GGORRI] 최소 인원 미달로 게임 시작 카운트다운이 취소되었습니다.");
+        }
+
+        // 플레이어 이탈로 인한 승리 조건 체크 (게임 중인 경우만)
+        if (currentStatus == GameStatus.IN_GAME) {
+            gameRulesManager.checkWinCondition();
+        }
+
+        // 모든 플레이어가 나가면 게임 강제 종료 (WAITING 상태가 아닌 경우만)
+        if (playersInGame.isEmpty() && currentStatus != GameStatus.WAITING && currentStatus != GameStatus.ENDING) {
+            plugin.getLogger().info("[GGORRI] 모든 플레이어가 게임에서 이탈하여 강제 종료됩니다.");
+            endGame(null); // 모든 플레이어가 나가면 강제 종료
+        }
+
+        return true; // 성공적으로 퇴장
     }
 
     /**
-     * Start the game (must be called by administrator)
-     * @return true if game successfully started, false otherwise
+     * 게임을 시작합니다.
+     * @return 게임 시작이 성공하면 true, 실패하면 false
      */
     public boolean startGame() {
-        if (currentStatus != GameStatus.WAITING) {
-            plugin.getLogger().warning("[GGORRI] 게임 시작 실패: 현재 상태가 WAITING이 아닙니다. (" + currentStatus.name() + ")");
-            return false;
-        }
-        if (playersInGame.size() < 2) { // 최소 2명 이상이어야 게임 시작 가능
-            plugin.getLogger().warning("[GGORRI] 게임 시작 실패: 최소 2명 이상의 플레이어가 필요합니다. (현재 " + playersInGame.size() + "명)");
+        if (currentStatus == GameStatus.IN_GAME) {
+            plugin.getLogger().warning("[GGORRI] 게임이 이미 진행 중입니다.");
+            // 실패 메시지는 GGORRICommand에서 처리
             return false;
         }
 
-        currentStatus = GameStatus.STARTING; // 시작 준비 상태
-        plugin.getLogger().info("[GGORRI] 게임 시작 준비 중...");
-        plugin.getServer().broadcastMessage(ChatColor.GREEN + "[GGORRI] 게임이 곧 시작됩니다! 참가자: " + playersInGame.size() + "명");
+        if (playersInGame.size() < MIN_PLAYERS) {
+            plugin.getLogger().warning("[GGORRI] 게임 시작 실패: 최소 플레이어 수 부족 (" + playersInGame.size() + "/" + MIN_PLAYERS + ")");
+            // 실패 메시지는 GGORRICommand에서 처리
+            return false;
+        }
 
-        chainManager.setupPlayerTargets(); // 플레이어 타겟 설정
-        spawnManager.spawnPlayers(new ArrayList<>(playersInGame.keySet())); // 플레이어 스폰 및 초기화
-        borderManager.setupInitialBorder();
-        borderManager.startBorderSystem();
+        // 카운트다운 중이었다면 취소
+        if (currentStatus == GameStatus.COUNTDOWN && gameStartCountdownTask != null) {
+            gameStartCountdownTask.cancel();
+            gameStartCountdownTask = null;
+            plugin.getLogger().info("[GGORRI] 수동 게임 시작으로 인해 카운트다운이 취소되었습니다.");
+        }
 
         currentStatus = GameStatus.IN_GAME;
-        plugin.getServer().broadcastMessage(ChatColor.GREEN + "§l[GGORRI] 게임 시작! 꼬리 고리를 따라가세요!");
+        plugin.getServer().broadcastMessage(ChatColor.GREEN + "§l[GGORRI] 게임 시작! 꼬리 고리 술래잡기가 시작됩니다!");
+        plugin.getLogger().info("[GGORRI] 게임이 성공적으로 시작되었습니다. 참여 플레이어: " + playersInGame.size() + "명");
 
-        // FOR DEBUG: 꼬리 고리 관계 출력 추가
-        plugin.getLogger().info("--- GGORRI 게임 시작! 현재 플레이어 및 타겟 관계 ---");
-        playersInGame.forEach((uuid, data) -> {
-            Player p = plugin.getServer().getPlayer(uuid);
-            String playerName = (p != null) ? p.getName() : "Unknown";
-            String targetName = "None";
-            if (data.getDirectTargetUUID() != null) {
-                Player targetPlayer = plugin.getServer().getPlayer(data.getDirectTargetUUID());
-                targetName = (targetPlayer != null) ? targetPlayer.getName() : "Unknown";
+        // 1. 월드 보더 초기 설정 (SpawnManager에 위임)
+        spawnManager.setupWorldBorder(spawnManager.getGameWorld());
+
+        // 2. 플레이어들에게 초기 꼬리 고리 타겟 설정
+        chainManager.setupPlayerTargets();
+
+        // 3. 플레이어 스폰 및 초기화
+        List<UUID> activePlayerUUIDs = new ArrayList<>(playersInGame.keySet());
+        spawnManager.spawnPlayers(activePlayerUUIDs);
+
+        // 4. 자기장 시스템 시작 (BorderManager에게 위임)
+        borderManager.startBorderSystem();
+
+        // 5. 주기적으로 승리 조건 확인 태스크 시작
+        if (winConditionCheckTask != null) { // 혹시 모를 중복 실행 방지
+            winConditionCheckTask.cancel();
+        }
+        winConditionCheckTask = new BukkitRunnable() {
+            @Override
+            public void run() {
+                gameRulesManager.checkWinCondition();
             }
-            plugin.getLogger().info(String.format("플레이어: %s (%s) | 타겟: %s", playerName, data.getRole(), targetName));
-        });
-        plugin.getLogger().info("--------------------------------------------------");
-        return true;
+        }.runTaskTimer(plugin, 20 * 5L, 20 * 10L); // 5초 후 첫 실행, 이후 10초마다 확인
+
+        // 게임 시작 시 모든 플레이어의 마지막 공격자를 리셋
+        playerManager.clearLastAttackers();
+
+        return true; // 게임 시작 성공
     }
 
     /**
-     * Forcefully shut down the game (must be called by administrator)
-     * @return true if game successfully stopped, false otherwise
+     * 게임을 완전히 중지하고 초기 상태로 되돌립니다.
+     * @return 게임 중지가 성공하면 true, 실패하면 false
      */
     public boolean stopGame() {
         if (currentStatus == GameStatus.WAITING || currentStatus == GameStatus.ENDING) {
-            plugin.getLogger().warning("[GGORRI] 게임 종료 실패: 게임이 활성화된 상태가 아닙니다. (현재 상태: " + currentStatus.name() + ")");
+            plugin.getLogger().warning("[GGORRI] 게임이 이미 대기 중이거나 종료 중입니다.");
+            // 실패 메시지는 GGORRICommand에서 처리
             return false;
         }
 
-        currentStatus = GameStatus.ENDING;
-        plugin.getLogger().info("[GGORRI] 게임 강제 종료 중...");
-        plugin.getServer().broadcastMessage(ChatColor.RED + "§l[GGORRI] 게임이 강제로 종료되었습니다!");
+        plugin.getLogger().info("[GGORRI] 관리자에 의해 게임 강제 종료 요청.");
 
-        // 모든 플레이어 초기화 및 게임 데이터에서 제거
-        for (UUID uuid : new ArrayList<>(playersInGame.keySet())) { // ConcurrentModificationException 방지
-            Player player = plugin.getServer().getPlayer(uuid);
-            if (player != null) {
-                playerManager.resetPlayer(player); // 인벤토리 초기화, 기본 장비 제거 등
-                if (gameWorld != null) {
-                    player.teleport(gameWorld.getSpawnLocation()); // 로비 스폰 지점으로 이동
-                } else {
-                    player.sendMessage(ChatColor.RED + "[GGORRI] 월드 스폰 위치를 찾을 수 없습니다!");
-                }
-            }
-            playersInGame.remove(uuid); // 게임 데이터에서 제거
+        // 진행 중인 모든 스케줄러 중지
+        if (gameStartCountdownTask != null) {
+            gameStartCountdownTask.cancel();
+            gameStartCountdownTask = null;
         }
-        playersInGame.clear(); // 혹시 남아있는 데이터가 있다면 모두 제거
+        if (winConditionCheckTask != null) {
+            winConditionCheckTask.cancel();
+            winConditionCheckTask = null;
+        }
+        borderManager.stopBorderSystem(); // 자기장 시스템 중지
+        actionBarManager.stopDisplaying(); // 액션바 시스템 중지 (endGame에서 다시 시작 가능성 고려)
 
-        // 월드 보더 초기화
-        spawnManager.setupWorldBorder(gameWorld);
+        // 모든 플레이어에게 메시지 브로드캐스트
+        plugin.getServer().broadcastMessage(ChatColor.RED + "§l[GGORRI] 관리자에 의해 게임이 강제 종료되었습니다!");
 
-        currentStatus = GameStatus.WAITING;
-        plugin.getLogger().info("[GGORRI] 게임 종료 및 초기화 완료.");
-        return true;
+        endGame(null); // 승자 없이 게임 강제 종료
+        plugin.getLogger().info("[GGORRI] 게임이 관리자에 의해 강제 중지되었습니다.");
+        return true; // 게임 중지 성공
     }
 
     /**
-     * 현재 게임의 승리 조건을 확인합니다.
-     * 모든 플레이어가 하나의 LEADER (팀장) 밑에 SLAVE로 종속되었는지 확인합니다.
-     * @return 승리한 팀장의 UUID, 또는 null (아직 승리 조건 미충족 시)
-     */
-    public UUID checkWinCondition() {
-        if (currentStatus != GameStatus.IN_GAME) {
-            return null; // 게임 중이 아니면 승리 조건 확인하지 않음
-        }
-
-        // 현재 게임에 참여중인 플레이어들의 역할 목록을 가져옵니다.
-        // 오프라인 플레이어는 제외 (isOnline() 사용)
-        Map<UUID, PlayerGameData> activePlayers = playersInGame.entrySet().stream()
-                .filter(entry -> plugin.getServer().getPlayer(entry.getKey()) != null && plugin.getServer().getPlayer(entry.getKey()).isOnline())
-                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
-
-        if (activePlayers.isEmpty()) {
-            plugin.getLogger().info("[GGORRI] 모든 플레이어가 게임에서 이탈하여 강제 종료됩니다.");
-            endGame(null); // 모든 플레이어가 나가면 강제 종료
-            return null;
-        }
-
-        // LEADER 역할을 가진 플레이어를 찾습니다.
-        List<UUID> leaders = activePlayers.entrySet().stream()
-                .filter(entry -> entry.getValue().getRole() == PlayerRole.LEADER)
-                .map(Map.Entry::getKey)
-                .collect(Collectors.toList());
-
-        // 팀장이 한 명만 남았고, 나머지 모든 플레이어가 그 팀장의 노예라면 승리
-        if (leaders.size() == 1) {
-            UUID winningLeaderUUID = leaders.get(0);
-            PlayerGameData winningLeaderData = playersInGame.get(winningLeaderUUID);
-
-            // 해당 팀장의 직계 타겟이 자기 자신이라면 (고리가 끊어지고 하나의 팀만 남음)
-            // 또는 모든 플레이어가 해당 팀장의 노예로 연결되어 있다면 (복잡한 연결 확인 필요)
-            // 간단하게는, LEADER가 하나만 남고 나머지는 모두 SLAVE인 경우로 판단
-
-            boolean allOthersAreSlaves = activePlayers.values().stream()
-                    .allMatch(data -> data.getRole() == PlayerRole.SLAVE || data.getPlayerUUID().equals(winningLeaderUUID));
-
-            if (allOthersAreSlaves) {
-                // 승리 조건 충족: 단 하나의 LEADER만 남고, 나머지는 모두 SLAVE
-                plugin.getLogger().info("[GGORRI] 승리 조건 충족! 승리한 팀장: " + plugin.getServer().getPlayer(winningLeaderUUID).getName());
-                endGame(winningLeaderUUID);
-                return winningLeaderUUID;
-            }
-        }
-
-        // 게임에 플레이어가 한 명만 남았고, 그 플레이어가 LEADER인 경우 (혼자 남음)
-        // 이 경우도 승리 조건으로 볼 수 있습니다. (마지막 한 명이 살아남음)
-        if (activePlayers.size() == 1 && leaders.size() == 1) {
-            UUID soleSurvivorUUID = leaders.get(0);
-            plugin.getLogger().info("[GGORRI] 마지막 플레이어가 생존하여 승리했습니다: " + plugin.getServer().getPlayer(soleSurvivorUUID).getName());
-            endGame(soleSurvivorUUID);
-            return soleSurvivorUUID;
-        }
-
-        plugin.getLogger().log(Level.FINE, "[GGORRI Debug] 현재 LEADER 수: " + leaders.size());
-        return null; // 아직 승리 조건 미충족
-    }
-
-    /**
-     * 게임을 종료하고 결과를 발표하며 모든 플레이어를 초기화합니다.
-     * @param winnerLeaderUUID 승리한 팀장의 UUID (모든 플레이어가 이탈했을 경우 null)
+     * 게임을 종료하고 결과를 발표합니다.
+     * @param winnerLeaderUUID 승리한 팀장의 UUID (승자가 없는 경우 null)
      */
     public void endGame(UUID winnerLeaderUUID) {
-        if (currentStatus == GameStatus.ENDING || currentStatus == GameStatus.WAITING) {
-            return; // 이미 종료 중이거나 대기 중이면 무시
+        if (currentStatus == GameStatus.ENDING) {
+            plugin.getLogger().warning("[GGORRI] 이미 게임 종료 처리 중입니다. 중복 호출 무시.");
+            return;
+        }
+        if (currentStatus == GameStatus.WAITING) {
+            plugin.getLogger().warning("[GGORRI] 게임이 대기 중입니다. 종료할 게임이 없습니다.");
+            return;
         }
 
         currentStatus = GameStatus.ENDING;
         plugin.getLogger().info("[GGORRI] 게임 종료 중...");
 
+        // 모든 스케줄러 중지
+        if (gameStartCountdownTask != null) gameStartCountdownTask.cancel();
+        if (winConditionCheckTask != null) winConditionCheckTask.cancel();
+        borderManager.stopBorderSystem(); // 자기장 시스템 중지
+
         String winnerMessage;
         if (winnerLeaderUUID != null) {
             Player winner = plugin.getServer().getPlayer(winnerLeaderUUID);
-            String winnerName = (winner != null) ? winner.getName() : "알 수 없는 플레이어";
+            String winnerName = (winner != null) ? winner.getName() : plugin.getServer().getOfflinePlayer(winnerLeaderUUID).getName();
             winnerMessage = ChatColor.GOLD + "§l[GGORRI] 게임 종료! " + winnerName + " 팀이 승리했습니다!";
             plugin.getServer().broadcastMessage(winnerMessage);
             plugin.getServer().broadcastMessage(ChatColor.YELLOW + "모든 플레이어가 " + winnerName + " 팀에 편입되었습니다!");
@@ -272,23 +338,29 @@ public class GameManager {
             Player player = plugin.getServer().getPlayer(uuid);
             if (player != null) {
                 playerManager.resetPlayer(player); // 인벤토리, 체력, 게임모드 등 초기화
-                // 게임 종료 후 로비 스폰 위치로 텔레포트
-                if (gameWorld != null) {
-                    player.teleport(gameWorld.getSpawnLocation());
-                    player.sendMessage(ChatColor.GREEN + "[GGORRI] 게임이 종료되어 로비로 이동했습니다.");
-                } else {
-                    player.sendMessage(ChatColor.RED + "[GGORRI] 월드 스폰 위치를 찾을 수 없어 현재 위치에 유지됩니다.");
+                // 플레이어가 온라인 상태일 때만 텔레포트
+                if (player.isOnline()) {
+                    if (spawnManager.getGameWorld() != null) {
+                        player.teleport(spawnManager.getGameWorld().getSpawnLocation());
+                        player.sendMessage(ChatColor.GREEN + "[GGORRI] 게임이 종료되어 로비로 이동했습니다.");
+                    } else {
+                        player.sendMessage(ChatColor.RED + "[GGORRI] 월드 스폰 위치를 찾을 수 없어 현재 위치에 유지됩니다.");
+                    }
                 }
             }
-            playersInGame.remove(uuid); // 게임 데이터에서 제거
+            // OfflinePlayer도 처리할 수 있도록 playerManager.removePlayerFromGame 수정 (UUID 기반)
+            playerManager.removePlayerFromGame(plugin.getServer().getPlayer(uuid)); // 게임 데이터에서 제거 (맵에서 제거)
         }
-        playersInGame.clear(); // 혹시 남아있는 데이터가 있다면 모두 제거
+        playersInGame.clear(); // 확실하게 비우기 (removePlayerFromGame이 이미 제거하지만, 혹시 모를 상황 대비)
 
-        // 월드 보더 초기화 (게임 시작 전 상태로)
-        spawnManager.setupWorldBorder(gameWorld);
 
-        currentStatus = GameStatus.WAITING; // 게임 상태를 대기 중으로 변경
+        // 월드 보더 초기화 (SpawnManager에게 위임)
+        spawnManager.setupWorldBorder(spawnManager.getGameWorld());
+
+        currentStatus = GameStatus.WAITING;
         plugin.getLogger().info("[GGORRI] 게임 종료 및 초기화 완료.");
+        // 액션바 시스템은 GameManager 생성 시 시작되므로, endGame에서는 굳이 다시 시작하지 않습니다.
+        // 다음 게임 시작 시 자연스럽게 액션바 메시지가 갱신될 것입니다.
     }
 
     /**
@@ -312,10 +384,6 @@ public class GameManager {
         return new HashSet<>(playersInGame.keySet());
     }
 
-    public World getGameWorld() {
-        return gameWorld;
-    }
-
     public PlayerManager getPlayerManager() {
         return playerManager;
     }
@@ -326,5 +394,9 @@ public class GameManager {
 
     public GameRulesManager getGameRulesManager() {
         return gameRulesManager;
+    }
+
+    public ActionBarManager getActionBarManager() {
+        return actionBarManager;
     }
 }
