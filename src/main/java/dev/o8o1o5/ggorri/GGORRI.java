@@ -1,6 +1,6 @@
 package dev.o8o1o5.ggorri;
 
-import dev.o8o1o5.ggorri.commands.GGORRICommand;
+import dev.o8o1o5.ggorri.GGORRICommand;
 import dev.o8o1o5.ggorri.listeners.GameListener;
 import dev.o8o1o5.ggorri.manager.GameManager;
 import dev.o8o1o5.ggorri.manager.PlayerManager;

@@ -1,4 +1,4 @@
-package dev.o8o1o5.ggorri.commands;
+package dev.o8o1o5.ggorri;
 
 import dev.o8o1o5.ggorri.GGORRI;
 import dev.o8o1o5.ggorri.manager.GameManager;
@@ -48,9 +48,9 @@ public class GGORRICommand implements CommandExecutor, TabCompleter {
                 }
                 Player player = (Player) sender;
                 if (gameManager.joinGame(player)) {
-                    player.sendMessage(ChatColor.GREEN + "[GGORRI] 게임에 참가했습니다! 현재 참가 인원: " + gameManager.getPlayersInGameCount());
+                    // player.sendMessage(ChatColor.GREEN + "[GGORRI] 게임에 참가했습니다! 현재 참가 인원: " + gameManager.getPlayersInGameCount());
                 } else {
-                    player.sendMessage(ChatColor.RED + "[GGORRI] 게임에 참가할 수 없습니다. 게임 상태를 확인해주세요.");
+                    // player.sendMessage(ChatColor.RED + "[GGORRI] 게임에 참가할 수 없습니다. 게임 상태를 확인해주세요.");
                 }
                 break;
 
@@ -61,9 +61,9 @@ public class GGORRICommand implements CommandExecutor, TabCompleter {
                 }
                 Player p = (Player) sender;
                 if (gameManager.leaveGame(p)) {
-                    p.sendMessage(ChatColor.GREEN + "[GGORRI] 게임에서 성공적으로 나갔습니다. 현재 참가 인원: " + gameManager.getPlayersInGameCount());
+                    // p.sendMessage(ChatColor.GREEN + "[GGORRI] 게임에서 성공적으로 나갔습니다. 현재 참가 인원: " + gameManager.getPlayersInGameCount());
                 } else {
-                    p.sendMessage(ChatColor.RED + "[GGORRI] 게임에 참여하고 있지 않습니다.");
+                    // p.sendMessage(ChatColor.RED + "[GGORRI] 게임에 참여하고 있지 않습니다.");
                 }
                 break;
 
@@ -74,9 +74,9 @@ public class GGORRICommand implements CommandExecutor, TabCompleter {
                 }
                 // GameManager.startGame()의 반환값을 활용
                 if (gameManager.startGame()) {
-                    sender.sendMessage(ChatColor.GREEN + "[GGORRI] GGORRI 게임 시작 요청이 성공적으로 처리되었습니다!");
+                    // sender.sendMessage(ChatColor.GREEN + "[GGORRI] GGORRI 게임 시작 요청이 성공적으로 처리되었습니다!");
                 } else {
-                    sender.sendMessage(ChatColor.RED + "[GGORRI] GGORRI 게임을 시작할 수 없습니다. (상태 확인 또는 플레이어 부족)");
+                    // sender.sendMessage(ChatColor.RED + "[GGORRI] GGORRI 게임을 시작할 수 없습니다. (상태 확인 또는 플레이어 부족)");
                 }
                 break;
 
@@ -87,14 +87,14 @@ public class GGORRICommand implements CommandExecutor, TabCompleter {
                 }
                 // GameManager.stopGame()의 반환값을 활용
                 if (gameManager.stopGame()) {
-                    sender.sendMessage(ChatColor.GREEN + "[GGORRI] GGORRI 게임을 성공적으로 종료했습니다.");
+                    // sender.sendMessage(ChatColor.GREEN + "[GGORRI] GGORRI 게임을 성공적으로 종료했습니다.");
                 } else {
-                    sender.sendMessage(ChatColor.RED + "[GGORRI] GGORRI 게임이 활성화된 상태가 아닙니다.");
+                    // sender.sendMessage(ChatColor.RED + "[GGORRI] GGORRI 게임이 활성화된 상태가 아닙니다.");
                 }
                 break;
 
             default:
-                sender.sendMessage(ChatColor.RED + "[GGORRI] 알 수 없는 명령어입니다. /ggorri 를 입력하여 도움말을 확인하세요.");
+                sendHelpMessage(sender);
                 break;
         }
 
@@ -119,5 +119,16 @@ public class GGORRICommand implements CommandExecutor, TabCompleter {
             }
         }
         return completions;
+    }
+
+    private void sendHelpMessage(CommandSender sender) {
+        sender.sendMessage(ChatColor.YELLOW + "§l===== GGORRI 명령어 =====");
+        sender.sendMessage(ChatColor.YELLOW + "/ggorri join - 게임에 참가합니다.");
+        sender.sendMessage(ChatColor.YELLOW + "/ggorri leave - 게임에서 나갑니다.");
+        if (sender.hasPermission("ggorri.admin")) {
+            sender.sendMessage(ChatColor.YELLOW + "/ggorri start - (관리자) 게임을 시작합니다.");
+            sender.sendMessage(ChatColor.YELLOW + "/ggorri stop - (관리자) 게임을 종료합니다.");
+        }
+        sender.sendMessage(ChatColor.YELLOW + "§l==========================");
     }
 }
