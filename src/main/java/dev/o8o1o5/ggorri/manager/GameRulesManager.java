@@ -3,13 +3,11 @@ package dev.o8o1o5.ggorri.manager;
 import dev.o8o1o5.ggorri.GGORRI;
 import dev.o8o1o5.ggorri.game.PlayerGameData;
 import dev.o8o1o5.ggorri.game.PlayerRole;
-import org.bukkit.Bukkit;
-import org.bukkit.ChatColor;
-import org.bukkit.GameMode;
-import org.bukkit.Location;
+import org.bukkit.*;
 import org.bukkit.entity.Player;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.inventory.ItemStack;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import org.bukkit.scheduler.BukkitRunnable;
@@ -25,6 +23,7 @@ public class GameRulesManager {
     private final SpawnManager spawnManager;
     private final ChainManager chainManager;
     private final BorderManager borderManager;
+    private final Random random;
 
     public GameRulesManager(GGORRI plugin, GameManager gameManager, PlayerManager playerManager, SpawnManager spawnManager, ChainManager chainManager, BorderManager borderManager) {
         this.plugin = plugin;
@@ -33,6 +32,7 @@ public class GameRulesManager {
         this.spawnManager = spawnManager;
         this.chainManager = chainManager;
         this.borderManager = borderManager;
+        this.random = new Random();
     }
 
     /**
@@ -47,6 +47,10 @@ public class GameRulesManager {
 
         if (deadPlayerData == null) {
             plugin.getLogger().warning("[GGORRI] " + deadPlayer.getName() + " 이 게임 데이터에서 발견되지 않았습니다.");
+            // 이 경우, 플레이어가 스펙테이터 모드로 고정될 수 있으므로,
+            // 기본 리스폰 로직으로 되돌리는 등의 예외 처리 필요
+            // deadPlayer.setGameMode(GameMode.SURVIVAL); // 비정상적인 경우 바로 서바이벌로 되돌림
+            // deadPlayer.spigot().respawn();
             return;
         }
 
@@ -92,10 +96,51 @@ public class GameRulesManager {
             Bukkit.broadcastMessage(ChatColor.GRAY + deadPlayer.getName() + "님이 사망했습니다. (자연사)");
         }
 
-        schedulePlayerRespawn(deadUUID, calculatedRespawnDelaySeconds * 20L, spawnNearTeamLeader);
+        List<ItemStack> playerInventoryItems = new ArrayList<>();
+        // 주 인벤토리 아이템
+        for (ItemStack item : deadPlayer.getInventory().getContents()) {
+            if (item != null && item.getType() != Material.AIR) {
+                playerInventoryItems.add(item.clone());
+            }
+        }
+        // 갑옷 아이템
+        for (ItemStack item : deadPlayer.getInventory().getArmorContents()) {
+            if (item != null && item.getType() != Material.AIR) {
+                playerInventoryItems.add(item.clone());
+            }
+        }
+        // 오프핸드 아이템
+        ItemStack offHand = deadPlayer.getInventory().getItemInOffHand();
+        if (offHand != null && offHand.getType() != Material.AIR) {
+            playerInventoryItems.add(offHand.clone());
+        }
 
-        playerManager.clearDamageRecordsForPlayer(deadUUID); // 사망 후 데미지 트래커 정리
-        checkWinCondition(); // 게임 종료 조건 체크
+        Collections.shuffle(playerInventoryItems, random);
+
+        int preservedItemsCount = playerInventoryItems.size() / 2;
+        if (preservedItemsCount == 0 && !playerInventoryItems.isEmpty()) {
+            preservedItemsCount = 1;
+        }
+
+        List<ItemStack> preservedItems = new ArrayList<>();
+        for (int i = 0; i < preservedItemsCount; i++) {
+            if (i >= playerInventoryItems.size()) break;
+            ItemStack item = playerInventoryItems.get(i);
+            preservedItems.add(item);
+        }
+
+        // 플레이어 인벤토리 비우기
+        // PlayerDeathEvent.setCancelled(true)와 함께 사용되어 아이템 증발을 처리합니다.
+        deadPlayer.getInventory().clear();
+        deadPlayer.getInventory().setArmorContents(null);
+        deadPlayer.getInventory().setItemInOffHand(null);
+        // --- 아이템 보존 로직 끝 ---
+
+        // schedulePlayerRespawn 호출 시 preservedItems도 함께 전달합니다.
+        schedulePlayerRespawn(deadUUID, calculatedRespawnDelaySeconds * 20L, spawnNearTeamLeader, preservedItems);
+
+        playerManager.clearDamageRecordsForPlayer(deadUUID);
+        checkWinCondition();
     }
 
     /**
@@ -138,41 +183,32 @@ public class GameRulesManager {
      * @param delayTicks 부활까지의 지연 시간 (틱)
      * @param spawnNearTeamLeader 팀장 근처에서 부활할지 여부 (true: 팀장 근처, false: 일반 스폰)
      */
-    public void schedulePlayerRespawn(UUID playerUUID, long delayTicks, boolean spawnNearTeamLeader) {
+    public void schedulePlayerRespawn(UUID playerUUID, long delayTicks, boolean spawnNearTeamLeader, List<ItemStack> preservedItems) {
         new BukkitRunnable() {
             @Override
             public void run() {
                 Player player = plugin.getServer().getPlayer(playerUUID);
-                // 플레이어가 온라인이고, 아직 게임에 참여 중인 경우에만 부활 처리
                 if (player != null && player.isOnline() && playerManager.getAllPlayersGameData().containsKey(playerUUID)) {
-                    respawnPlayer(player, spawnNearTeamLeader);
+                    // respawnPlayer 호출 시 preservedItems 전달
+                    respawnPlayer(player, spawnNearTeamLeader, preservedItems); // <-- 변경된 부분
 
-                    // 부활 후 액션바 메시지 다시 활성화
-                    // BorderManager.applyBorderDamageAndWarnings가 매 1초마다 액션바 메시지를 보내므로 별도로 활성화할 필요가 없을 수 있습니다.
-                    // 단, 사망 직전에 강제로 메시지를 지웠다면, BorderManager가 다음 틱에 다시 해당 메시지를 보내줄 것입니다.
-                    // 필요하다면, 여기에 직접 "안전합니다" 메시지를 한 번 보내는 코드를 추가할 수 있습니다.
-                    // gameManager.getActionBarManager().setMessage(player.getUniqueId(), ActionBarManager.PRIORITY_BORDER_INSIDE, ChatColor.GREEN + "✅ 다음 자기장 내부에 있습니다. 안전합니다!");
+                    // 부활 후 액션바 메시지 등은 respawnPlayer 또는 BorderManager에서 처리
                 } else if (player != null && player.isOnline()) {
-                    // 게임에서 나갔지만 온라인 상태라면 (예: /ggorri leave 후 사망 타이머 만료)
-                    // 기본 리스폰을 통해 로비 등으로 이동하도록 합니다.
                     player.spigot().respawn();
-                    // 이때는 PlayerManager.removePlayerFromGame(player)도 호출되어야 합니다.
-                    // 이는 GameManager.leaveGame()에서 이미 처리되므로 여기서는 중복 호출하지 않습니다.
                 }
             }
         }.runTaskLater(plugin, delayTicks);
     }
 
-    private void respawnPlayer(Player player, boolean spawnNearTeamLeader) {
+    private void respawnPlayer(Player player, boolean spawnNearTeamLeader, List<ItemStack> preservedItems) { // preservedItems 인자 유지
         PlayerGameData playerData = playerManager.getPlayerGameData(player.getUniqueId());
         if (playerData == null) {
             plugin.getLogger().warning("[GGORRI] 부활하려는 플레이어(" + player.getName() + ")의 게임 데이터가 없습니다.");
-            // 플레이어가 게임 데이터에 없으면 일반 리스폰 처리 (로비 등으로 이동)
-            player.spigot().respawn();
+            player.spigot().respawn(); // 게임 데이터가 없는 경우 기본 리스폰
             return;
         }
 
-        // 플레이어의 게임 모드를 SURVIVAL로 변경 (스펙테이터 -> 서바이벌)
+        // 플레이어의 게임 모드를 SURVIVAL로 변경 (onPlayerDeath에서 스펙테이터로 설정했으므로 여기서 다시 돌립니다.)
         player.setGameMode(GameMode.SURVIVAL);
 
         Location spawnLoc = null;
@@ -211,10 +247,20 @@ public class GameRulesManager {
             }
         }
 
-        playerManager.resetPlayer(player); // 인벤토리, 체력, 게임모드 등 초기화
+        // 먼저 플레이어의 모든 상태(인벤토리 포함)를 초기화합니다.
+        // resetPlayer 메서드가 인벤토리를 clear() 하므로, 이 시점에서 인벤토리가 비워집니다.
+        playerManager.resetPlayer(player);
+
+        // resetPlayer 호출 후, 보존된 아이템을 플레이어 인벤토리에 다시 추가합니다.
+        if (!preservedItems.isEmpty()) {
+            player.getInventory().addItem(preservedItems.toArray(new ItemStack[0]));
+        }
+
+        // 플레이어를 최종 스폰 위치로 텔레포트합니다.
         player.teleport(spawnLoc);
         player.sendMessage("[GGORRI] 부활했습니다! 다시 꼬리를 쫓으세요!");
 
+        // 부활 후 무적 효과 및 화염 저항 효과를 부여합니다.
         player.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, 20 * 5, 255, false, false)); // 5초 무적
         player.addPotionEffect(new PotionEffect(PotionEffectType.FIRE_RESISTANCE, 20 * 5, 0, false, false)); // 5초 화염 저항
 

@@ -12,11 +12,13 @@ import java.util.stream.Collectors;
 
 public class ChainManager {
     private final GGORRI plugin;
+    private final GameManager gameManager;
     private final Map<UUID, PlayerGameData> playersInGame;
     private final Random random;
 
-    public ChainManager(GGORRI plugin, Map<UUID, PlayerGameData> playersInGame) {
+    public ChainManager(GGORRI plugin, GameManager gameManager, Map<UUID, PlayerGameData> playersInGame) {
         this.plugin = plugin;
+        this.gameManager = gameManager;
         this.playersInGame = playersInGame;
         this.random = new Random();
     }
@@ -136,7 +138,7 @@ public class ChainManager {
             // ... (생략) ...
         }
 
-        plugin.getLogger().info("[GGORRI] 팀장 이탈 처리 완료.");
+        gameManager.getGameRulesManager().checkWinCondition();
 
         plugin.getLogger().info("[GGORRI] 팀장 이탈 처리 완료.");
     }

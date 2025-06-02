@@ -70,87 +70,29 @@ public class GameListener implements Listener {
     public void onPlayerDeath(PlayerDeathEvent event) {
         Player deadPlayer = event.getEntity();
 
-        if (gameManager.getCurrentStatus() != GameManager.GameStatus.IN_GAME) {
-            // 게임 중이 아니면 일반적인 사망 처리
-            return;
-        }
+        // 1. 사망 이벤트를 취소하여 기본 사망 처리 (리스폰 버튼 활성화, 자동 리스폰 화면 등)를 막음
+        event.setCancelled(true);
 
-        event.setShowDeathMessages(false); // 사망 메시지 숨김 (선택 사항)
-        event.getDrops().clear(); // 기본 드롭 모두 제거 (우리가 직접 드롭할 것이므로)
-        event.setDroppedExp(0); // 경험치 드롭 방지
+        // 2. 기본 아이템 드롭 및 경험치 드롭 방지 (cancel()만으로는 부족할 수 있음)
+        event.getDrops().clear();
+        event.setDroppedExp(0);
 
-        // 인벤토리 아이템 절반 드롭 로직
-        List<ItemStack> playerInventoryItems = new ArrayList<>();
-        // 주 인벤토리 아이템
-        for (ItemStack item : deadPlayer.getInventory().getContents()) {
-            if (item != null && item.getType() != Material.AIR) {
-                playerInventoryItems.add(item.clone()); // 아이템 복사본 추가
-            }
-        }
-        // 갑옷 아이템
-        for (ItemStack item : deadPlayer.getInventory().getArmorContents()) {
-            if (item != null && item.getType() != Material.AIR) {
-                playerInventoryItems.add(item.clone());
-            }
-        }
-        // 오프핸드 아이템
-        ItemStack offHand = deadPlayer.getInventory().getItemInOffHand();
-        if (offHand != null && offHand.getType() != Material.AIR) {
-            playerInventoryItems.add(offHand.clone());
-        }
+        // 3. 플레이어의 현재 체력과 허기를 풀로 채워 '죽지 않은' 상태로 만들지만,
+        // 시각적으로는 스펙테이터 모드로 전환하여 사망 상태를 표현
+        deadPlayer.setHealth(deadPlayer.getMaxHealth()); // 체력을 최대치로 복구
+        deadPlayer.setFoodLevel(20); // 허기 회복
+        deadPlayer.setSaturation(5.0f); // 포만감 회복
+        deadPlayer.setFireTicks(0); // 불 제거
+        deadPlayer.setFallDistance(0); // 낙하 데미지 초기화
+        deadPlayer.setGameMode(GameMode.SPECTATOR); // 플레이어를 스펙테이터 모드로 전환
+        // deadPlayer.teleport(deadPlayer.getLocation()); // 고정된 위치에 묶어두는 효과 (선택 사항)
 
-        Collections.shuffle(playerInventoryItems, random); // 아이템 섞기
+        Player killer = deadPlayer.getKiller();
+        DamageCause damageCause = deadPlayer.getLastDamageCause() != null ? deadPlayer.getLastDamageCause().getCause() : DamageCause.CUSTOM;
 
-        int itemsToDropCount = playerInventoryItems.size() / 2;
-        if (itemsToDropCount == 0 && !playerInventoryItems.isEmpty()) {
-            itemsToDropCount = 1; // 아이템이 있다면 최소 1개는 드롭
-        }
-
-        List<ItemStack> droppedItems = new ArrayList<>();
-        for (int i = 0; i < itemsToDropCount; i++) {
-            if (i >= playerInventoryItems.size()) break;
-            ItemStack item = playerInventoryItems.get(i);
-            droppedItems.add(item);
-            // NOTE: 인벤토리에서 직접 제거하는 것은 PlayerManager.resetPlayer에서 일괄 처리되므로 여기서는 제거하지 않습니다.
-            // deadPlayer.getInventory().remove(item); // 여기서는 제거하지 않음
-        }
-
-        // 인벤토리 비우기 (일단 다 비우고, 드롭되지 않은 아이템만 다시 돌려주거나 리셋 로직에 맡김)
-        deadPlayer.getInventory().clear();
-        deadPlayer.getInventory().setArmorContents(null);
-        deadPlayer.getInventory().setItemInOffHand(null);
-
-
-        // 월드에 아이템 실제로 드롭
-        Location deathLocation = deadPlayer.getLocation(); // 사망 위치
-        for (ItemStack item : droppedItems) {
-            if (item != null && item.getType() != Material.AIR) {
-                deadPlayer.getWorld().dropItemNaturally(deathLocation, item);
-            }
-        }
-
-        // 플레이어를 스펙테이터 모드로 변경하고 사망 위치에 고정
-        new BukkitRunnable() {
-            @Override
-            public void run() {
-                if (deadPlayer.isOnline()) { // 플레이어가 아직 온라인일 경우에만 처리
-                    deadPlayer.setGameMode(GameMode.SPECTATOR);
-                    deadPlayer.teleport(deathLocation);
-                    deadPlayer.setSpectatorTarget(null); // 다른 엔티티 추적 방지 (선택 사항)
-                    deadPlayer.sendMessage(ChatColor.RED + "[GGORRI] 당신은 사망했습니다. 잠시 후 부활합니다...");
-
-                    // 플레이어 사망 시 기존 액션바 메시지 제거 (부활 타이머 메시지를 위해)
-                    gameManager.getActionBarManager().removeMessage(deadPlayer.getUniqueId(), ActionBarManager.PRIORITY_BORDER_OUTSIDE);
-                    gameManager.getActionBarManager().removeMessage(deadPlayer.getUniqueId(), ActionBarManager.PRIORITY_BORDER_IMMINENT_SHRINK);
-                    gameManager.getActionBarManager().removeMessage(deadPlayer.getUniqueId(), ActionBarManager.PRIORITY_BORDER_APPROACHING);
-                    gameManager.getActionBarManager().removeMessage(deadPlayer.getUniqueId(), ActionBarManager.PRIORITY_BORDER_INSIDE);
-                    gameManager.getActionBarManager().removeMessage(deadPlayer.getUniqueId(), ActionBarManager.PRIORITY_PLAYER_ROLE_INFO);
-                }
-            }
-        }.runTaskLater(plugin, 1L); // 다음 틱에 실행하여 게임모드 변경 (즉시 적용)
-
-        // 사망 처리 로직은 GameRulesManager에 위임
-        DamageCause cause = event.getEntity().getLastDamageCause() != null ? event.getEntity().getLastDamageCause().getCause() : DamageCause.CUSTOM;
-        gameManager.getGameRulesManager().handlePlayerDeath(deadPlayer, deadPlayer.getKiller(), cause);
+        // GameRulesManager의 handlePlayerDeath 메서드 호출
+        // 이제 handlePlayerDeath 내에서는 플레이어의 게임모드를 다시 설정하지 않습니다.
+        // 대신 아이템 처리만 담당하게 됩니다.
+        gameManager.getGameRulesManager().handlePlayerDeath(deadPlayer, killer, damageCause);
     }
 }

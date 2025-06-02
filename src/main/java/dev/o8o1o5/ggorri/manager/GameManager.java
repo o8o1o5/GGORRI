@@ -44,7 +44,7 @@ public class GameManager {
         this.spawnManager = new SpawnManager(plugin);
         this.actionBarManager = new ActionBarManager(plugin);
         this.borderManager = new BorderManager(plugin, actionBarManager, playersInGame); // BorderManager에 playersInGame 전달
-        this.chainManager = new ChainManager(plugin, playersInGame);
+        this.chainManager = new ChainManager(plugin, this, playersInGame);
         this.gameRulesManager = new GameRulesManager(plugin, this, playerManager, spawnManager, chainManager, borderManager);
 
         this.currentStatus = GameStatus.WAITING;
