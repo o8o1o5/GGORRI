@@ -49,8 +49,8 @@ public class GameRulesManager {
             plugin.getLogger().warning("[GGORRI] " + deadPlayer.getName() + " 이 게임 데이터에서 발견되지 않았습니다.");
             // 이 경우, 플레이어가 스펙테이터 모드로 고정될 수 있으므로,
             // 기본 리스폰 로직으로 되돌리는 등의 예외 처리 필요
-            // deadPlayer.setGameMode(GameMode.SURVIVAL); // 비정상적인 경우 바로 서바이벌로 되돌림
-            // deadPlayer.spigot().respawn();
+            deadPlayer.setGameMode(GameMode.SURVIVAL); // 비정상적인 경우 바로 서바이벌로 되돌림
+            deadPlayer.spigot().respawn();
             return;
         }
 
@@ -58,11 +58,13 @@ public class GameRulesManager {
 
         deadPlayerData.incrementDeathCount();
 
+        // 리스폰 지연 시간 계산
         long baseRespawnDelaySeconds = 60;
         long calculatedRespawnDelaySeconds = (long) (baseRespawnDelaySeconds * Math.pow(1.5, deadPlayerData.getDeathCount() - 1));
         calculatedRespawnDelaySeconds = Math.max(1, calculatedRespawnDelaySeconds);
         calculatedRespawnDelaySeconds = Math.min(600, calculatedRespawnDelaySeconds);
 
+        // 킬러 판정
         UUID actualKillerUUID = null;
         if (killer != null) {
             actualKillerUUID = killer.getUniqueId();
@@ -75,6 +77,7 @@ public class GameRulesManager {
 
         boolean spawnNearTeamLeader = false;
 
+        // 킬 타입 판정 및 처리
         if (actualKillerUUID != null && playerManager.getAllPlayersGameData().containsKey(actualKillerUUID)) {
             PlayerGameData killerPlayerData = playerManager.getPlayerGameData(actualKillerUUID);
             if (killerPlayerData != null && killerPlayerData.getRole() == PlayerRole.LEADER) {
@@ -97,46 +100,49 @@ public class GameRulesManager {
         }
 
         List<ItemStack> playerInventoryItems = new ArrayList<>();
-        // 주 인벤토리 아이템
+        // 주 인벤토리 아이템 복사
         for (ItemStack item : deadPlayer.getInventory().getContents()) {
             if (item != null && item.getType() != Material.AIR) {
                 playerInventoryItems.add(item.clone());
             }
         }
-        // 갑옷 아이템
+        // 갑옷 아이템 복사
         for (ItemStack item : deadPlayer.getInventory().getArmorContents()) {
             if (item != null && item.getType() != Material.AIR) {
                 playerInventoryItems.add(item.clone());
             }
         }
-        // 오프핸드 아이템
+        // 오프핸드 아이템 복사
         ItemStack offHand = deadPlayer.getInventory().getItemInOffHand();
         if (offHand != null && offHand.getType() != Material.AIR) {
             playerInventoryItems.add(offHand.clone());
         }
 
-        Collections.shuffle(playerInventoryItems, random);
+        Collections.shuffle(playerInventoryItems, random); // 아이템 순서를 무작위로 섞음
 
+        // 보존할 아이템 개수 계산: 전체 아이템의 절반
         int preservedItemsCount = playerInventoryItems.size() / 2;
         if (preservedItemsCount == 0 && !playerInventoryItems.isEmpty()) {
-            preservedItemsCount = 1;
+            preservedItemsCount = 1; // 아이템이 하나라도 있으면 최소 1개는 보존
         }
 
         List<ItemStack> preservedItems = new ArrayList<>();
+        // 셔플된 리스트에서 계산된 개수만큼의 아이템을 preservedItems에 추가
         for (int i = 0; i < preservedItemsCount; i++) {
-            if (i >= playerInventoryItems.size()) break;
+            if (i >= playerInventoryItems.size()) break; // 리스트 범위를 벗어나지 않도록
             ItemStack item = playerInventoryItems.get(i);
             preservedItems.add(item);
         }
 
-        // 플레이어 인벤토리 비우기
-        // PlayerDeathEvent.setCancelled(true)와 함께 사용되어 아이템 증발을 처리합니다.
+        // --- 이 부분이 중요합니다. ---
+        // 플레이어의 인벤토리를 완전히 비웁니다.
+        // 이는 '보존되지 않은 나머지 절반의 아이템'을 사라지게 하는 역할을 합니다.
         deadPlayer.getInventory().clear();
         deadPlayer.getInventory().setArmorContents(null);
         deadPlayer.getInventory().setItemInOffHand(null);
         // --- 아이템 보존 로직 끝 ---
 
-        // schedulePlayerRespawn 호출 시 preservedItems도 함께 전달합니다.
+        // schedulePlayerRespawn 호출 시 preservedItems (보존된 절반의 아이템)을 함께 전달합니다.
         schedulePlayerRespawn(deadUUID, calculatedRespawnDelaySeconds * 20L, spawnNearTeamLeader, preservedItems);
 
         playerManager.clearDamageRecordsForPlayer(deadUUID);
