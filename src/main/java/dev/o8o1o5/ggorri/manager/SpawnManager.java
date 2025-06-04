@@ -73,7 +73,7 @@ public class SpawnManager {
         for (UUID playerUUID : playerUUIDs) {
             Player player = plugin.getServer().getPlayer(playerUUID);
             if (player != null) {
-                Location spawnLoc = findSafeSpawnLocation(gameWorld, (int) INITIAL_BORDER_SIZE, 100);
+                Location spawnLoc = findSafeSpawnLocation(gameWorld, (int) INITIAL_BORDER_SIZE / 2, 100);
                 if (spawnLoc == null) {
                     plugin.getLogger().warning("[GGORRI] 플레이어 " + player.getName() + "를 위한 안전한 스폰 위치를 찾지 못했습니다.");
                     spawnLoc = gameWorld.getSpawnLocation();
@@ -225,19 +225,47 @@ public class SpawnManager {
         if (world == null) return null;
 
         // 월드의 최고 높이부터 내려오면서 안전한 블록 찾기
-        for (int y = world.getMaxHeight() - 1; y > world.getMinHeight(); y--) {
+        // getHighestBlockAt(loc.getBlockX(), loc.getBlockZ()) 를 사용하여 표면 블록의 Y 값을 얻습니다.
+        // 이 방법을 사용하면 지하 동굴에 스폰되는 것을 방지할 수 있습니다.
+        int surfaceY = world.getHighestBlockYAt(loc.getBlockX(), loc.getBlockZ());
+
+        // surfaceY는 가장 높은 불투명 블록의 Y 좌표를 반환합니다.
+        // 플레이어가 설 수 있는 위치는 그 위 1칸 (머리) 또는 2칸 (발) 입니다.
+        // 따라서, surfaceY + 1 (발 위치) 또는 surfaceY + 2 (머리 위치)를 시도합니다.
+        // 여기서는 플레이어가 발을 딛을 위치를 surfaceY + 1 로 설정하고,
+        // 그 위 두 칸이 비어있는지 확인합니다.
+
+        // 실제 스폰할 위치는 surfaceY보다 1 높거나 2 높아야 합니다.
+        // 예를 들어, 잔디 블록(surfaceY) 위에 스폰하려면, 스폰 Y는 surfaceY + 1이 됩니다.
+        for (int y = surfaceY + 5; y >= world.getMinHeight(); y--) { // 지표면 위 5칸부터 아래로 탐색
             Block block = new Location(world, loc.getX(), y, loc.getZ()).getBlock();
             Block belowBlock = block.getRelative(BlockFace.DOWN);
-            Block aboveBlock = block.getRelative(BlockFace.UP);
+            Block belowBelowBlock = block.getRelative(BlockFace.DOWN, 2); // 플레이어 발 밑 두 칸
 
-            // 1. 현재 블록이 공기 또는 통과 가능한 블록
+            // 1. 현재 블록이 공기 또는 통과 가능한 블록 (플레이어 발 위치)
             // 2. 아래 블록이 단단한 블록 (발 딛을 곳)
-            // 3. 위 블록도 공기 또는 통과 가능한 블록 (플레이어가 서 있을 공간)
+            // 3. 바로 위 블록도 공기 또는 통과 가능한 블록 (플레이어 머리 위치)
             if (!block.getType().isSolid() && !block.isLiquid() &&
                     belowBlock.getType().isSolid() && !belowBlock.isLiquid() &&
-                    !aboveBlock.getType().isSolid() && !aboveBlock.isLiquid()) {
-                // 안전한 스폰 위치 발견, 플레이어가 서 있을 수 있도록 약간 위로
-                return block.getLocation().add(0.5, 1.0, 0.5);
+                    !block.getRelative(BlockFace.UP).getType().isSolid() && !block.getRelative(BlockFace.UP).isLiquid()) {
+
+                // 추가: 주변에 위험한 블록이 없는지 확인 (isSafeSpawnLocation 로직 일부 가져옴)
+                Location potentialSpawn = block.getLocation().add(0.5, 0.0, 0.5); // 블록 중앙에 맞춤
+
+                // 위험한 블록 검사 (Cactus, Lava, Water, Magma_Block)
+                if (potentialSpawn.clone().subtract(0, 1, 0).getBlock().getType() == Material.LAVA ||
+                        potentialSpawn.clone().subtract(0, 1, 0).getBlock().getType() == Material.WATER ||
+                        block.getType() == Material.CACTUS || block.getType() == Material.MAGMA_BLOCK ||
+                        block.getRelative(BlockFace.UP).getType() == Material.CACTUS || block.getRelative(BlockFace.UP).getType() == Material.MAGMA_BLOCK) {
+                    continue; // 위험한 블록이 있으면 다음 Y 시도
+                }
+
+                // 이 위치가 WorldBorder 안에 있는지 추가로 확인
+                if (!world.getWorldBorder().isInside(potentialSpawn)) {
+                    continue; // 월드 보더 밖이면 다음 Y 시도
+                }
+
+                return potentialSpawn; // 안전한 스폰 위치 발견
             }
         }
         return null;

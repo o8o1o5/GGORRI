@@ -77,21 +77,32 @@ public class GameRulesManager {
 
         boolean spawnNearTeamLeader = false;
 
+        // **여기부터 수정된 부분입니다.**
         // 킬 타입 판정 및 처리
         if (actualKillerUUID != null && playerManager.getAllPlayersGameData().containsKey(actualKillerUUID)) {
             PlayerGameData killerPlayerData = playerManager.getPlayerGameData(actualKillerUUID);
-            if (killerPlayerData != null && killerPlayerData.getRole() == PlayerRole.LEADER) {
-                if (killerPlayerData.getDirectTargetUUID() != null && killerPlayerData.getDirectTargetUUID().equals(deadUUID)) {
-                    plugin.getLogger().info("[GGORRI] " + deadPlayer.getName() + "이(가) " + plugin.getServer().getOfflinePlayer(actualKillerUUID).getName() + "에게 정상 처치됨.");
-                    handleNormalKill(deadPlayer, plugin.getServer().getPlayer(actualKillerUUID));
+            if (killerPlayerData != null) { // 킬러 데이터가 유효한 경우
+                // **노예 플레이어가 사망했을 때의 특별 처리**
+                if (deadPlayerData.getRole() == PlayerRole.SLAVE) {
+                    plugin.getLogger().info("[GGORRI] 노예 " + deadPlayer.getName() + "이(가) " + plugin.getServer().getOfflinePlayer(actualKillerUUID).getName() + "에게 처치됨 (노예). 일반 킬 처리.");
+                    // 노예 사망 시 리더 근처 스폰 여부는 게임 규칙에 따라 결정 (여기서는 기존 로직 유지)
                     spawnNearTeamLeader = true;
-                } else {
-                    plugin.getLogger().info("[GGORRI] " + deadPlayer.getName() + "이(가) " + plugin.getServer().getOfflinePlayer(actualKillerUUID).getName() + "에게 잘못된 타겟으로 처치됨.");
-                    handleWrongTargetKill(deadPlayer, plugin.getServer().getPlayer(actualKillerUUID));
-                    spawnNearTeamLeader = true;
+                } else if (killerPlayerData.getRole() == PlayerRole.LEADER) {
+                    if (killerPlayerData.getDirectTargetUUID() != null && killerPlayerData.getDirectTargetUUID().equals(deadUUID)) {
+                        plugin.getLogger().info("[GGORRI] " + deadPlayer.getName() + "이(가) " + plugin.getServer().getOfflinePlayer(actualKillerUUID).getName() + "에게 정상 처치됨.");
+                        handleNormalKill(deadPlayer, plugin.getServer().getPlayer(actualKillerUUID));
+                        spawnNearTeamLeader = true;
+                    } else {
+                        plugin.getLogger().info("[GGORRI] " + deadPlayer.getName() + "이(가) " + plugin.getServer().getOfflinePlayer(actualKillerUUID).getName() + "에게 잘못된 타겟으로 처치됨.");
+                        handleWrongTargetKill(deadPlayer, plugin.getServer().getPlayer(actualKillerUUID));
+                        spawnNearTeamLeader = true;
+                    }
+                } else { // 킬러는 있으나 리더가 아니거나 노예가 아닌 플레이어
+                    plugin.getLogger().info("[GGORRI] " + deadPlayer.getName() + "이(가) (비유효한 킬러: " + (killer != null ? killer.getName() : "없음") + " / 트래커 킬러: " + (actualKillerUUID != null ? plugin.getServer().getOfflinePlayer(actualKillerUUID).getName() : "없음") + ")에게 사망. 자연사로 처리.");
+                    Bukkit.broadcastMessage(ChatColor.GRAY + deadPlayer.getName() + "님이 사망했습니다. (자연사)");
                 }
-            } else {
-                plugin.getLogger().info("[GGORRI] " + deadPlayer.getName() + "이(가) (비유효한 킬러: " + (killer != null ? killer.getName() : "없음") + " / 트래커 킬러: " + (actualKillerUUID != null ? plugin.getServer().getOfflinePlayer(actualKillerUUID).getName() : "없음") + ")에게 사망. 자연사로 처리.");
+            } else { // 킬러 playerData가 null (이상한 상황이지만 예외 처리)
+                plugin.getLogger().info("[GGORRI] " + deadPlayer.getName() + "이(가) 자연사했습니다. (킬러PlayerData 없음)");
                 Bukkit.broadcastMessage(ChatColor.GRAY + deadPlayer.getName() + "님이 사망했습니다. (자연사)");
             }
         } else {

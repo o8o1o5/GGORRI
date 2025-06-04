@@ -27,6 +27,7 @@ public final class GGORRI extends JavaPlugin {
 
         gameManager = new GameManager(this);
 
+
         if (getCommand("ggorri") != null) {
             GGORRICommand ggorriCommand = new GGORRICommand(this, gameManager);
             getCommand("ggorri").setExecutor(ggorriCommand);
