@@ -11,6 +11,7 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import org.bukkit.scheduler.BukkitRunnable;
+import org.bukkit.scheduler.BukkitTask;
 
 import java.util.*;
 import java.util.logging.Level;
@@ -23,15 +24,19 @@ public class GameRulesManager {
     private final SpawnManager spawnManager;
     private final ChainManager chainManager;
     private final BorderManager borderManager;
+    private final ActionBarManager actionBarManager;
     private final Random random;
 
-    public GameRulesManager(GGORRI plugin, GameManager gameManager, PlayerManager playerManager, SpawnManager spawnManager, ChainManager chainManager, BorderManager borderManager) {
+    private final Map<UUID, BukkitTask> countdownTasks = new HashMap<>();
+
+    public GameRulesManager(GGORRI plugin, GameManager gameManager, PlayerManager playerManager, SpawnManager spawnManager, ChainManager chainManager, BorderManager borderManager, ActionBarManager actionBarManager) {
         this.plugin = plugin;
         this.gameManager = gameManager;
         this.playerManager = playerManager;
         this.spawnManager = spawnManager;
         this.chainManager = chainManager;
         this.borderManager = borderManager;
+        this.actionBarManager = actionBarManager;
         this.random = new Random();
     }
 
@@ -153,8 +158,14 @@ public class GameRulesManager {
         deadPlayer.getInventory().setItemInOffHand(null);
         // --- 아이템 보존 로직 끝 ---
 
-        // schedulePlayerRespawn 호출 시 preservedItems (보존된 절반의 아이템)을 함께 전달합니다.
-        schedulePlayerRespawn(deadUUID, calculatedRespawnDelaySeconds * 20L, spawnNearTeamLeader, preservedItems);
+        // --- 플레이어 모드 변경 & 암흑 효과 ---
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            deadPlayer.setGameMode(GameMode.SPECTATOR);
+
+            deadPlayer.addPotionEffect(new PotionEffect(PotionEffectType.DARKNESS, Integer.MAX_VALUE, 0, false, false));
+
+            schedulePlayerRespawn(deadUUID, calculatedRespawnDelaySeconds * 20L, spawnNearTeamLeader, preservedItems);
+        }, 1l);
 
         playerManager.clearDamageRecordsForPlayer(deadUUID);
         checkWinCondition();
@@ -201,17 +212,29 @@ public class GameRulesManager {
      * @param spawnNearTeamLeader 팀장 근처에서 부활할지 여부 (true: 팀장 근처, false: 일반 스폰)
      */
     public void schedulePlayerRespawn(UUID playerUUID, long delayTicks, boolean spawnNearTeamLeader, List<ItemStack> preservedItems) {
-        new BukkitRunnable() {
+        if (countdownTasks.containsKey(playerUUID)) {
+            countdownTasks.get(playerUUID).cancel();
+            countdownTasks.remove(playerUUID);
+        }
+
+        final long[] remainingTicks = {delayTicks}; // 람다 내부에서 값을 변경하기
+        final Player player = Bukkit.getPlayer(playerUUID);
+
+        if (player == null || !player.isOnline()) {
+            actionBarManager.removeMessage(playerUUID, ActionBarManager.PRIORITY_RESPAWN_COUNTDOWN);
+            plugin.getLogger().warning("[GGORRI] " + (player != null ? player.getName() : "Unknown Player") + " is offline, cannot schedule respawn.");
+            return;
+        }
+
+        BukkitTask task = new BukkitRunnable() {
             @Override
             public void run() {
-                Player player = plugin.getServer().getPlayer(playerUUID);
-                if (player != null && player.isOnline() && playerManager.getAllPlayersGameData().containsKey(playerUUID)) {
-                    // respawnPlayer 호출 시 preservedItems 전달
-                    respawnPlayer(player, spawnNearTeamLeader, preservedItems); // <-- 변경된 부분
-
-                    // 부활 후 액션바 메시지 등은 respawnPlayer 또는 BorderManager에서 처리
-                } else if (player != null && player.isOnline()) {
-                    player.spigot().respawn();
+                if (!player.isOnline() || !player.isValid()) {
+                    cancel();
+                    countdownTasks.remove(playerUUID);
+                    actionBarManager.removeMessage(playerUUID, ActionBarManager.PRIORITY_RESPAWN_COUNTDOWN);
+                    plugin.getLogger().info("[GGORRI] Respawn countdown for " + player.getName() + " cancelled (offline/invalid)");
+                    return;
                 }
             }
         }.runTaskLater(plugin, delayTicks);

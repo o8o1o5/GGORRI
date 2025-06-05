@@ -95,6 +95,7 @@ public class ActionBarManager {
     }
 
     // --- 액션바 우선순위 상수 정의 ---
+    public static final int PRIORITY_RESPAWN_COUNTDOWN = 1000;
     public static final int PRIORITY_BORDER_OUTSIDE = 100;    // 자기장 외부 (최고)
     public static final int PRIORITY_BORDER_IMMINENT_SHRINK = 90; // 자기장 수축 임박 카운트다운
     public static final int PRIORITY_BORDER_APPROACHING = 80; // 자기장 근접

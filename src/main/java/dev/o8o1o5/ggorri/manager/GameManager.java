@@ -46,7 +46,7 @@ public class GameManager {
         this.actionBarManager = new ActionBarManager(plugin);
         this.borderManager = new BorderManager(plugin, actionBarManager, playersInGame); // BorderManager에 playersInGame 전달
         this.chainManager = new ChainManager(plugin, this, playersInGame);
-        this.gameRulesManager = new GameRulesManager(plugin, this, playerManager, spawnManager, chainManager, borderManager);
+        this.gameRulesManager = new GameRulesManager(plugin, this, playerManager, spawnManager, chainManager, borderManager, actionBarManager);
 
         this.gameListener = new GameListener(plugin, this, playerManager);
         plugin.getServer().getPluginManager().registerEvents(gameListener, plugin);
