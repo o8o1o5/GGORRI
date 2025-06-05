@@ -3,7 +3,9 @@ package dev.o8o1o5.ggorri.manager;
 import dev.o8o1o5.ggorri.GGORRI;
 import dev.o8o1o5.ggorri.game.PlayerGameData;
 import dev.o8o1o5.ggorri.game.PlayerRole;
+import dev.o8o1o5.ggorri.items.CustomItems;
 import dev.o8o1o5.ggorri.listeners.GameListener;
+import dev.o8o1o5.ggorri.listeners.TrackersCompassListener;
 import org.bukkit.*;
 import org.bukkit.block.Block;
 import org.bukkit.block.data.type.Chain;
@@ -26,7 +28,9 @@ public class GameManager {
     private final GameRulesManager gameRulesManager;
     private final BorderManager borderManager;
     private final ActionBarManager actionBarManager;
+
     private final GameListener gameListener;
+    private final TrackersCompassListener trackersCompassListener;
 
     public Map<UUID, PlayerGameData> playersInGame; // 모든 매니저가 공유
 
@@ -42,13 +46,14 @@ public class GameManager {
         this.plugin = plugin;
         this.playersInGame = new ConcurrentHashMap<>(); // ConcurrentHashMap 사용
         this.playerManager = new PlayerManager(plugin, playersInGame);
-        this.spawnManager = new SpawnManager(plugin);
+        this.spawnManager = new SpawnManager(plugin, playerManager);
         this.actionBarManager = new ActionBarManager(plugin);
         this.borderManager = new BorderManager(plugin, actionBarManager, playersInGame); // BorderManager에 playersInGame 전달
         this.chainManager = new ChainManager(plugin, this, playersInGame);
         this.gameRulesManager = new GameRulesManager(plugin, this, playerManager, spawnManager, chainManager, borderManager, actionBarManager);
 
         this.gameListener = new GameListener(plugin, this, playerManager);
+        this.trackersCompassListener = new TrackersCompassListener(plugin, playerManager);
         plugin.getServer().getPluginManager().registerEvents(gameListener, plugin);
 
         this.currentStatus = GameStatus.WAITING;
@@ -284,7 +289,16 @@ public class GameManager {
                         Player p = Bukkit.getPlayer(uuid);
                         if (p != null && p.isOnline()) {
                             playerManager.resetPlayer(p);
+
+
+
+                            //**********************
+                            p.getInventory().addItem(CustomItems.createTrackersCompass());
                             p.setGameMode(GameMode.SURVIVAL);
+                            //**********************
+
+
+
                         }
                     }
                     // ★★★ 여기까지가 카운트다운 완료 후 실행될 로직입니다. ★★★

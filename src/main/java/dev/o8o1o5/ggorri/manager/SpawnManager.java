@@ -1,6 +1,7 @@
 package dev.o8o1o5.ggorri.manager;
 
 import dev.o8o1o5.ggorri.GGORRI;
+import dev.o8o1o5.ggorri.items.CustomItems;
 import org.bukkit.*;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
@@ -13,13 +14,15 @@ import java.util.logging.Level;
 
 public class SpawnManager {
     private final GGORRI plugin;
+    private final PlayerManager playerManager;
     private World gameWorld;
     private final Random random;
 
     private static final double INITIAL_BORDER_SIZE = 3200.0;
 
-    public SpawnManager(GGORRI plugin) {
+    public SpawnManager(GGORRI plugin, PlayerManager playerManager) {
         this.plugin = plugin;
+        this.playerManager = playerManager;
         this.random = new Random();
         this.gameWorld = plugin.getServer().getWorld("world");
         if (this.gameWorld == null) {
@@ -82,6 +85,7 @@ public class SpawnManager {
 
                 player.teleport(spawnLoc);
                 player.sendMessage(ChatColor.GREEN + "[GGORRI] 텔레포트 완료!");
+                player.sendMessage(ChatColor.GREEN + "[GGORRI] 당신의 타겟은 " + Bukkit.getPlayer(playerManager.getPlayerGameData(playerUUID).getDirectTargetUUID()).getName() + " 입니다!");
 
                 plugin.getLogger().info("[GGORRI] " + player.getName() + "님이 " + spawnLoc.getBlockX() + ", " + spawnLoc.getBlockY() + ", " + spawnLoc.getBlockZ() + "로 스폰되었습니다.");
             } else {

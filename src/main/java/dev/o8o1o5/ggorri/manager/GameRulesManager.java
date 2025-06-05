@@ -8,6 +8,8 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.PlayerInventory;
+import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import org.bukkit.scheduler.BukkitRunnable;
@@ -64,10 +66,8 @@ public class GameRulesManager {
         deadPlayerData.incrementDeathCount();
 
         // 리스폰 지연 시간 계산
-        long baseRespawnDelaySeconds = 60;
-        long calculatedRespawnDelaySeconds = (long) (baseRespawnDelaySeconds * Math.pow(1.5, deadPlayerData.getDeathCount() - 1));
-        calculatedRespawnDelaySeconds = Math.max(1, calculatedRespawnDelaySeconds);
-        calculatedRespawnDelaySeconds = Math.min(600, calculatedRespawnDelaySeconds);
+        final long calculatedRespawnDelaySeconds = (long) (60 * Math.pow(1.5, deadPlayerData.getDeathCount() - 1));
+        final long finalRespawnDelaySeconds = Math.max(1, Math.min(600, calculatedRespawnDelaySeconds));
 
         // 킬러 판정
         UUID actualKillerUUID = null;
@@ -80,7 +80,7 @@ public class GameRulesManager {
             }
         }
 
-        boolean spawnNearTeamLeader = false;
+        boolean tempSpawnNearTeamLeader = false;
 
         // **여기부터 수정된 부분입니다.**
         // 킬 타입 판정 및 처리
@@ -91,16 +91,16 @@ public class GameRulesManager {
                 if (deadPlayerData.getRole() == PlayerRole.SLAVE) {
                     plugin.getLogger().info("[GGORRI] 노예 " + deadPlayer.getName() + "이(가) " + plugin.getServer().getOfflinePlayer(actualKillerUUID).getName() + "에게 처치됨 (노예). 일반 킬 처리.");
                     // 노예 사망 시 리더 근처 스폰 여부는 게임 규칙에 따라 결정 (여기서는 기존 로직 유지)
-                    spawnNearTeamLeader = true;
+                    tempSpawnNearTeamLeader = true;
                 } else if (killerPlayerData.getRole() == PlayerRole.LEADER) {
                     if (killerPlayerData.getDirectTargetUUID() != null && killerPlayerData.getDirectTargetUUID().equals(deadUUID)) {
                         plugin.getLogger().info("[GGORRI] " + deadPlayer.getName() + "이(가) " + plugin.getServer().getOfflinePlayer(actualKillerUUID).getName() + "에게 정상 처치됨.");
                         handleNormalKill(deadPlayer, plugin.getServer().getPlayer(actualKillerUUID));
-                        spawnNearTeamLeader = true;
+                        tempSpawnNearTeamLeader = true;
                     } else {
                         plugin.getLogger().info("[GGORRI] " + deadPlayer.getName() + "이(가) " + plugin.getServer().getOfflinePlayer(actualKillerUUID).getName() + "에게 잘못된 타겟으로 처치됨.");
                         handleWrongTargetKill(deadPlayer, plugin.getServer().getPlayer(actualKillerUUID));
-                        spawnNearTeamLeader = true;
+                        tempSpawnNearTeamLeader = true;
                     }
                 } else { // 킬러는 있으나 리더가 아니거나 노예가 아닌 플레이어
                     plugin.getLogger().info("[GGORRI] " + deadPlayer.getName() + "이(가) (비유효한 킬러: " + (killer != null ? killer.getName() : "없음") + " / 트래커 킬러: " + (actualKillerUUID != null ? plugin.getServer().getOfflinePlayer(actualKillerUUID).getName() : "없음") + ")에게 사망. 자연사로 처리.");
@@ -115,48 +115,58 @@ public class GameRulesManager {
             Bukkit.broadcastMessage(ChatColor.GRAY + deadPlayer.getName() + "님이 사망했습니다. (자연사)");
         }
 
-        List<ItemStack> playerInventoryItems = new ArrayList<>();
-        // 주 인벤토리 아이템 복사
-        for (ItemStack item : deadPlayer.getInventory().getContents()) {
+        PlayerInventory inventory = deadPlayer.getInventory();
+
+        List<ItemStack> allPlayerItems = new ArrayList<>();
+        List<ItemStack> customItemsToPreserve = new ArrayList<>();
+        List<ItemStack> normalItems = new ArrayList<>();
+
+        // 모든 인벤토리 슬롯의 아이템을 순회하며 커스텀 아이템과 일반 아이템 분리
+        // getContents()는 주 인벤토리, 갑옷, 오프핸드를 모두 포함할 수 있는 편리한 메서드입니다.
+        for (ItemStack item : inventory.getContents()) {
             if (item != null && item.getType() != Material.AIR) {
-                playerInventoryItems.add(item.clone());
+                // 커스텀 아이템인지 확인 (PersistentDataContainer를 사용)
+                if (item.hasItemMeta() && item.getItemMeta().getPersistentDataContainer().has(plugin.getCustomItemIdKey(), PersistentDataType.STRING)) {
+                    customItemsToPreserve.add(item.clone()); // 커스텀 아이템은 무조건 보존 리스트에 추가
+                } else {
+                    normalItems.add(item.clone()); // 일반 아이템은 일반 아이템 리스트에 추가
+                }
             }
         }
-        // 갑옷 아이템 복사
-        for (ItemStack item : deadPlayer.getInventory().getArmorContents()) {
-            if (item != null && item.getType() != Material.AIR) {
-                playerInventoryItems.add(item.clone());
-            }
-        }
-        // 오프핸드 아이템 복사
-        ItemStack offHand = deadPlayer.getInventory().getItemInOffHand();
-        if (offHand != null && offHand.getType() != Material.AIR) {
-            playerInventoryItems.add(offHand.clone());
+
+        // 일반 아이템 순서를 무작위로 섞음
+        Collections.shuffle(normalItems, random);
+
+        // 보존할 일반 아이템 개수 계산: 일반 아이템의 절반
+        int preservedNormalItemsCount = normalItems.size() / 2;
+        if (preservedNormalItemsCount == 0 && !normalItems.isEmpty()) {
+            preservedNormalItemsCount = 1; // 일반 아이템이 하나라도 있으면 최소 1개는 보존
         }
 
-        Collections.shuffle(playerInventoryItems, random); // 아이템 순서를 무작위로 섞음
+        final List<ItemStack> finalPreservedItems = new ArrayList<>();
 
-        // 보존할 아이템 개수 계산: 전체 아이템의 절반
-        int preservedItemsCount = playerInventoryItems.size() / 2;
-        if (preservedItemsCount == 0 && !playerInventoryItems.isEmpty()) {
-            preservedItemsCount = 1; // 아이템이 하나라도 있으면 최소 1개는 보존
-        }
+        // 1. 모든 커스텀 아이템을 최종 보존 리스트에 추가
+        finalPreservedItems.addAll(customItemsToPreserve);
 
-        List<ItemStack> preservedItems = new ArrayList<>();
-        // 셔플된 리스트에서 계산된 개수만큼의 아이템을 preservedItems에 추가
-        for (int i = 0; i < preservedItemsCount; i++) {
-            if (i >= playerInventoryItems.size()) break; // 리스트 범위를 벗어나지 않도록
-            ItemStack item = playerInventoryItems.get(i);
-            preservedItems.add(item);
+        // 2. 무작위로 선택된 일반 아이템을 최종 보존 리스트에 추가
+        for (int i = 0; i < preservedNormalItemsCount; i++) {
+            if (i >= normalItems.size()) break; // 혹시 모를 인덱스 오류 방지
+            finalPreservedItems.add(normalItems.get(i));
         }
 
         // --- 이 부분이 중요합니다. ---
         // 플레이어의 인벤토리를 완전히 비웁니다.
-        // 이는 '보존되지 않은 나머지 절반의 아이템'을 사라지게 하는 역할을 합니다.
         deadPlayer.getInventory().clear();
-        deadPlayer.getInventory().setArmorContents(null);
-        deadPlayer.getInventory().setItemInOffHand(null);
-        // --- 아이템 보존 로직 끝 ---
+        deadPlayer.getInventory().setArmorContents(null); // 갑옷 슬롯도 비움
+        deadPlayer.getInventory().setItemInOffHand(null); // 오프핸드도 비움
+        // --- 인벤토리 비우기 끝 ---
+
+        // 이제 보존할 아이템들을 다시 플레이어 인벤토리에 지급합니다.
+        for (ItemStack item : finalPreservedItems) {
+            deadPlayer.getInventory().addItem(item);
+        }
+
+        final boolean finalSpawnNearTeamLeader = tempSpawnNearTeamLeader;
 
         // --- 플레이어 모드 변경 & 암흑 효과 ---
         Bukkit.getScheduler().runTaskLater(plugin, () -> {
@@ -164,8 +174,8 @@ public class GameRulesManager {
 
             deadPlayer.addPotionEffect(new PotionEffect(PotionEffectType.DARKNESS, Integer.MAX_VALUE, 0, false, false));
 
-            schedulePlayerRespawn(deadUUID, calculatedRespawnDelaySeconds * 20L, spawnNearTeamLeader, preservedItems);
-        }, 1l);
+            schedulePlayerRespawn(deadUUID, finalRespawnDelaySeconds * 20L, finalSpawnNearTeamLeader, finalPreservedItems);
+        }, 1L);
 
         playerManager.clearDamageRecordsForPlayer(deadUUID);
         checkWinCondition();
@@ -236,6 +246,22 @@ public class GameRulesManager {
                     plugin.getLogger().info("[GGORRI] Respawn countdown for " + player.getName() + " cancelled (offline/invalid)");
                     return;
                 }
+
+                if (remainingTicks[0] <= 0) {
+                    cancel();
+                    countdownTasks.remove(playerUUID);
+                    actionBarManager.removeMessage(playerUUID, ActionBarManager.PRIORITY_RESPAWN_COUNTDOWN);
+
+                    respawnPlayer(player, spawnNearTeamLeader, preservedItems);
+                    plugin.getLogger().info("[GGORRI] " + player.getName() + " has been respawned.");
+                    return;
+                }
+
+                String message = "부활 대기 중: " + (remainingTicks[0] / 20) + "초";
+                actionBarManager.setMessage(playerUUID, ActionBarManager.PRIORITY_RESPAWN_COUNTDOWN, message);
+
+                remainingTicks[0] -= 20L;
+                if (remainingTicks[0] < 0) remainingTicks[0] = 0;
             }
         }.runTaskLater(plugin, delayTicks);
     }
