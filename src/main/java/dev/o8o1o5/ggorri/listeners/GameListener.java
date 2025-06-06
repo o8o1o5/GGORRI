@@ -1,8 +1,6 @@
 package dev.o8o1o5.ggorri.listeners;
 
 import dev.o8o1o5.ggorri.GGORRI;
-import dev.o8o1o5.ggorri.game.PlayerGameData; // 사용하지 않으면 제거 가능
-import dev.o8o1o5.ggorri.manager.ActionBarManager; // 사용하지 않으면 제거 가능
 import dev.o8o1o5.ggorri.manager.GameManager;
 import dev.o8o1o5.ggorri.manager.PlayerManager;
 import org.bukkit.*;
@@ -14,13 +12,8 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityDamageEvent.DamageCause;
-import org.bukkit.inventory.ItemStack; // 사용하지 않으면 제거 가능
-import org.bukkit.potion.PotionEffect;
-import org.bukkit.potion.PotionEffectType;
-import org.bukkit.scheduler.BukkitRunnable; // 사용하지 않으면 제거 가능
 
 import java.util.*;
-import java.util.logging.Level;
 
 public class GameListener implements Listener {
     private final GGORRI plugin;

@@ -27,7 +27,6 @@ public class GameManager {
     private final ChainManager chainManager;
     private final GameRulesManager gameRulesManager;
     private final BorderManager borderManager;
-    private final ActionBarManager actionBarManager;
 
     private final GameListener gameListener;
     private final TrackersCompassListener trackersCompassListener;
@@ -47,19 +46,16 @@ public class GameManager {
         this.playersInGame = new ConcurrentHashMap<>(); // ConcurrentHashMap 사용
         this.playerManager = new PlayerManager(plugin, playersInGame);
         this.spawnManager = new SpawnManager(plugin, playerManager);
-        this.actionBarManager = new ActionBarManager(plugin);
-        this.borderManager = new BorderManager(plugin, actionBarManager, playersInGame); // BorderManager에 playersInGame 전달
+        this.borderManager = new BorderManager(plugin, playersInGame); // BorderManager에 playersInGame 전달
         this.chainManager = new ChainManager(plugin, this, playersInGame);
-        this.gameRulesManager = new GameRulesManager(plugin, this, playerManager, spawnManager, chainManager, borderManager, actionBarManager);
+        this.gameRulesManager = new GameRulesManager(plugin, this, playerManager, spawnManager, chainManager, borderManager);
 
         this.gameListener = new GameListener(plugin, this, playerManager);
-        this.trackersCompassListener = new TrackersCompassListener(plugin, playerManager);
         plugin.getServer().getPluginManager().registerEvents(gameListener, plugin);
+        this.trackersCompassListener = new TrackersCompassListener(plugin, playerManager);
+        plugin.getServer().getPluginManager().registerEvents(trackersCompassListener, plugin);
 
         this.currentStatus = GameStatus.WAITING;
-
-        // 액션바 시스템 시작
-        actionBarManager.startDisplaying();
     }
 
     /**
@@ -342,7 +338,6 @@ public class GameManager {
             winConditionCheckTask = null;
         }
         borderManager.stopBorderSystem();
-        actionBarManager.stopDisplaying();
 
         plugin.getServer().broadcastMessage(ChatColor.RED + "§l[GGORRI] 관리자에 의해 게임이 강제 종료되었습니다!");
         endGame(null);
@@ -446,9 +441,5 @@ public class GameManager {
 
     public GameRulesManager getGameRulesManager() {
         return gameRulesManager;
-    }
-
-    public ActionBarManager getActionBarManager() {
-        return actionBarManager;
     }
 }

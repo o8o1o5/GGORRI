@@ -26,19 +26,17 @@ public class GameRulesManager {
     private final SpawnManager spawnManager;
     private final ChainManager chainManager;
     private final BorderManager borderManager;
-    private final ActionBarManager actionBarManager;
     private final Random random;
 
     private final Map<UUID, BukkitTask> countdownTasks = new HashMap<>();
 
-    public GameRulesManager(GGORRI plugin, GameManager gameManager, PlayerManager playerManager, SpawnManager spawnManager, ChainManager chainManager, BorderManager borderManager, ActionBarManager actionBarManager) {
+    public GameRulesManager(GGORRI plugin, GameManager gameManager, PlayerManager playerManager, SpawnManager spawnManager, ChainManager chainManager, BorderManager borderManager) {
         this.plugin = plugin;
         this.gameManager = gameManager;
         this.playerManager = playerManager;
         this.spawnManager = spawnManager;
         this.chainManager = chainManager;
         this.borderManager = borderManager;
-        this.actionBarManager = actionBarManager;
         this.random = new Random();
     }
 
@@ -231,7 +229,6 @@ public class GameRulesManager {
         final Player player = Bukkit.getPlayer(playerUUID);
 
         if (player == null || !player.isOnline()) {
-            actionBarManager.removeMessage(playerUUID, ActionBarManager.PRIORITY_RESPAWN_COUNTDOWN);
             plugin.getLogger().warning("[GGORRI] " + (player != null ? player.getName() : "Unknown Player") + " is offline, cannot schedule respawn.");
             return;
         }
@@ -242,7 +239,6 @@ public class GameRulesManager {
                 if (!player.isOnline() || !player.isValid()) {
                     cancel();
                     countdownTasks.remove(playerUUID);
-                    actionBarManager.removeMessage(playerUUID, ActionBarManager.PRIORITY_RESPAWN_COUNTDOWN);
                     plugin.getLogger().info("[GGORRI] Respawn countdown for " + player.getName() + " cancelled (offline/invalid)");
                     return;
                 }
@@ -250,15 +246,13 @@ public class GameRulesManager {
                 if (remainingTicks[0] <= 0) {
                     cancel();
                     countdownTasks.remove(playerUUID);
-                    actionBarManager.removeMessage(playerUUID, ActionBarManager.PRIORITY_RESPAWN_COUNTDOWN);
 
                     respawnPlayer(player, spawnNearTeamLeader, preservedItems);
                     plugin.getLogger().info("[GGORRI] " + player.getName() + " has been respawned.");
                     return;
                 }
 
-                String message = "부활 대기 중: " + (remainingTicks[0] / 20) + "초";
-                actionBarManager.setMessage(playerUUID, ActionBarManager.PRIORITY_RESPAWN_COUNTDOWN, message);
+                player.sendActionBar("부활 대기 중: " + (remainingTicks[0] / 20) + "초");
 
                 remainingTicks[0] -= 20L;
                 if (remainingTicks[0] < 0) remainingTicks[0] = 0;
