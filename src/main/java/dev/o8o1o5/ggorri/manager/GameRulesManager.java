@@ -233,18 +233,25 @@ public class GameRulesManager {
             return;
         }
 
+        // *** 이 부분을 수정합니다. ***
+        // runTaskLater -> runTaskTimer 로 변경
+        // delay: 첫 실행까지의 지연 시간 (초기 지연 시간)
+        // period: run() 메서드의 반복 간격 (20틱 = 1초)
         BukkitTask task = new BukkitRunnable() {
             @Override
             public void run() {
+                // 이 로그는 이제 1초마다 출력될 것입니다.
+                plugin.getLogger().info("[GGORRI] " + player.getName() + " 부활 카운트다운 진행 중. 남은 틱: " + remainingTicks[0]);
+
                 if (!player.isOnline() || !player.isValid()) {
-                    cancel();
+                    cancel(); // 플레이어가 오프라인이거나 유효하지 않으면 취소
                     countdownTasks.remove(playerUUID);
-                    plugin.getLogger().info("[GGORRI] Respawn countdown for " + player.getName() + " cancelled (offline/invalid)");
+                    plugin.getLogger().warning("[GGORRI] Respawn countdown for " + player.getName() + " cancelled (offline/invalid)");
                     return;
                 }
 
                 if (remainingTicks[0] <= 0) {
-                    cancel();
+                    cancel(); // 카운트다운이 끝나면 취소
                     countdownTasks.remove(playerUUID);
 
                     respawnPlayer(player, spawnNearTeamLeader, preservedItems);
@@ -252,12 +259,17 @@ public class GameRulesManager {
                     return;
                 }
 
+                // 액션바 메시지 전송
                 player.sendActionBar("부활 대기 중: " + (remainingTicks[0] / 20) + "초");
 
+                // 남은 틱 감소 (1초마다 20틱씩 감소)
                 remainingTicks[0] -= 20L;
-                if (remainingTicks[0] < 0) remainingTicks[0] = 0;
+                if (remainingTicks[0] < 0) remainingTicks[0] = 0; // 혹시라도 음수가 되는 경우 방지
             }
-        }.runTaskLater(plugin, delayTicks);
+        }.runTaskTimer(plugin, 0L, 20L); // 첫 실행은 즉시 (0L), 이후 20틱(1초)마다 반복
+
+        // 작업 등록
+        countdownTasks.put(playerUUID, task);
     }
 
     private void respawnPlayer(Player player, boolean spawnNearTeamLeader, List<ItemStack> preservedItems) { // preservedItems 인자 유지
@@ -278,7 +290,7 @@ public class GameRulesManager {
             if (teamLeaderUUID != null) {
                 Player teamLeader = plugin.getServer().getPlayer(teamLeaderUUID);
                 if (teamLeader != null && teamLeader.isOnline()) {
-                    spawnLoc = spawnManager.findSafeSpawnLocation(teamLeader.getLocation(), 100, 10);
+                    spawnLoc = spawnManager.findSafeSpawnLocation(teamLeader.getLocation(), 50, 10, 100);
                     if (spawnLoc == null) {
                         plugin.getLogger().warning("[GGORRI] " + player.getName() + " (노예)를 위한 팀장 근처 안전 스폰 위치를 찾지 못했습니다. 일반 스폰으로 이동합니다.");
                         player.sendMessage(ChatColor.RED + "[GGORRI] 팀장 근처 부활 위치를 찾지 못해 일반 스폰으로 이동합니다.");
@@ -297,7 +309,7 @@ public class GameRulesManager {
 
         if (spawnLoc == null) {
             // 전역 스폰 위치 찾기
-            spawnLoc = spawnManager.findSafeSpawnLocation(spawnManager.getGameWorld(), (int)spawnManager.getGameWorld().getWorldBorder().getSize(), 100);
+            spawnLoc = spawnManager.findSafeSpawnLocation(borderManager.getCurrentBorderCenter(), (int)spawnManager.getGameWorld().getWorldBorder().getSize(), 0, 500);
             if (spawnLoc == null) {
                 plugin.getLogger().warning("[GGORRI] 플레이어 " + player.getName() + "를 위한 안전한 부활 위치를 찾지 못했습니다. 월드 스폰으로 이동합니다.");
                 player.sendMessage(ChatColor.RED + "[GGORRI] 안전한 부활 위치를 찾지 못해 월드 스폰으로 이동합니다.");

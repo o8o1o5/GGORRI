@@ -76,9 +76,9 @@ public class TrackersCompassListener implements Listener {
 
                     // 4. 원래의 기능 실행 (타겟 위치 메시지 전송)
                     player.sendMessage("[GGORRI] 타겟의 위치는 (" +
-                            (int) targetLocation.getX() + ", " +
-                            (int) targetLocation.getY() + ", " +
-                            (int) targetLocation.getZ() + ") 입니다.");
+                            Math.round(targetLocation.getX()) + ", " +
+                            Math.round(targetLocation.getY()) + ", " +
+                            Math.round(targetLocation.getZ()) + ") 입니다.");
                     event.setCancelled(true); // 이벤트 취소 (아이템 사용 애니메이션만 남김)
                 }
             }
