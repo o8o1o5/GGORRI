@@ -32,9 +32,9 @@ public class BorderManager {
     private BukkitTask borderDamageTask; // 자기장 외부 데미지 및 액션바 경고 스케줄러 (별도 유지)
 
     // 자기장 페이즈 지속 시간 상수 (틱 단위)
-    private final long COOLDOWN_DURATION_TICKS = 8 * 60 * 20L;       // 8분 대기
-    private final long ANNOUNCEMENT_DURATION_TICKS = 1 * 60 * 20L;   // 1분 공지/카운트다운
-    private final long SHRINK_DURATION_TICKS = 1 * 60 * 20L;        // 1분 수축
+    private final long PRE_SHRINK_ANNOUNCEMENT_DURATION_TICKS = 1 * 20L; // 수축 전 다음 자기장 경고 시간 (1초, 즉시)
+    private final long COOLDOWN_BEFORE_SHRINK_TICKS = 9 * 60 * 20L;       // 9분 대기 (수축 시작까지)
+    private final long SHRINK_DURATION_TICKS = 1 * 60 * 20L;        // 1분 수축 시간
     private final long TICK_INTERVAL = 20L; // 1초 (20틱)
 
     // 자기장 페이즈 정의
@@ -44,9 +44,9 @@ public class BorderManager {
 
     // 자기장 상태 Enum
     public enum BorderPhaseState {
-        COOLDOWN,       // 다음 공지까지 대기
-        ANNOUNCEMENT,   // 수축 공지 및 카운트다운
-        SHRINKING       // 실제 자기장 수축 중
+        PRE_SHRINK_ANNOUNCEMENT, // 수축 전 다음 자기장 정보 공지
+        COOLDOWN_BEFORE_SHRINK,  // 수축 전 대기 (카운트다운 포함)
+        SHRINKING                // 실제 자기장 수축 중
     }
     private BorderPhaseState currentState; // 현재 자기장 시스템의 상태
     private long currentStateElapsedTimeTicks; // 현재 상태에서 경과한 시간 (틱)
@@ -77,7 +77,7 @@ public class BorderManager {
         phaseDamages.put(6, 25.0);
 
         // 초기 상태 설정
-        this.currentState = BorderPhaseState.COOLDOWN; // 초기 상태는 대기
+        this.currentState = BorderPhaseState.PRE_SHRINK_ANNOUNCEMENT; // 초기 상태는 수축 전 공지
         this.currentStateElapsedTimeTicks = 0;
         this.currentPhase = 0; // 시작 페이즈 (phaseSizes 맵의 0단계)
     }
@@ -110,8 +110,13 @@ public class BorderManager {
         plugin.getLogger().info("[GGORRI] startBorderSystem() 호출됨. 자기장 시스템 시작 시도.");
         stopBorderSystem(); // 기존 스케줄러 중지
 
-        // 자기장 초기 설정 (반드시 start 전에 호출되어야 함)
-        setupInitialBorder(); // 혹시 호출 안된 경우를 위해 여기서 다시 호출
+        // 자기장 초기 설정
+        setupInitialBorder();
+
+        // 첫 자기장 단계에 대한 다음 자기장 정보 미리 계산 및 공지
+        // (currentPhase는 0, 즉 첫 번째 자기장)
+        prepareNextBorderPhaseData(); // 0단계에서 1단계로 줄어들 다음 정보 계산
+        sendInitialAnnouncement(); // 1단계 자기장 정보 공지
 
         // 1. 자기장 외부 플레이어 데미지 및 액션바 스케줄러 (매 초)
         borderDamageTask = new BukkitRunnable() {
@@ -128,11 +133,11 @@ public class BorderManager {
                 currentStateElapsedTimeTicks += TICK_INTERVAL; // 현재 상태에서 경과한 시간 업데이트
 
                 switch (currentState) {
-                    case COOLDOWN:
-                        handleCooldownState();
+                    case PRE_SHRINK_ANNOUNCEMENT:
+                        handlePreShrinkAnnouncementState();
                         break;
-                    case ANNOUNCEMENT:
-                        handleAnnouncementState();
+                    case COOLDOWN_BEFORE_SHRINK:
+                        handleCooldownBeforeShrinkState();
                         break;
                     case SHRINKING:
                         handleShrinkingState();
@@ -141,7 +146,7 @@ public class BorderManager {
             }
         }.runTaskTimer(plugin, 0L, TICK_INTERVAL); // 0틱 지연, 1초마다 반복
 
-        plugin.getLogger().info("[GGORRI] 자기장 시스템이 시작되었습니다. 초기 COOLDOWN 상태(" + (COOLDOWN_DURATION_TICKS / TICK_INTERVAL) + "초 대기).");
+        plugin.getLogger().info("[GGORRI] 자기장 시스템이 시작되었습니다. 초기 PRE_SHRINK_ANNOUNCEMENT 상태(" + (PRE_SHRINK_ANNOUNCEMENT_DURATION_TICKS / TICK_INTERVAL) + "초 경고).");
     }
 
     /**
@@ -156,53 +161,36 @@ public class BorderManager {
             borderDamageTask.cancel();
             borderDamageTask = null;
         }
-        // 게임 종료 시 월드 보더를 초기화할 필요가 있다면 여기에 추가 (선택 사항)
-        // if (gameBorder != null) {
-        //     gameBorder.reset();
-        // }
         plugin.getLogger().info("[GGORRI] 자기장 시스템이 중지되었습니다.");
     }
 
     /**
-     * COOLDOWN 상태를 처리합니다. 다음 공지까지 대기합니다.
+     * PRE_SHRINK_ANNOUNCEMENT 상태를 처리합니다. 다음 자기장 정보를 공지합니다.
+     * 이 상태는 매우 짧게 유지되어 경고 메시지를 보여주는 역할만 합니다.
      */
-    private void handleCooldownState() {
-        // COOLDOWN 상태에서는 특별한 공지나 액션바 없음.
-        // `applyBorderDamageAndWarnings`가 외부 경고를 담당합니다.
-
-        if (currentStateElapsedTimeTicks >= COOLDOWN_DURATION_TICKS) {
-            // COOLDOWN 시간 완료, 다음 상태로 전환
-            currentPhase++; // 다음 자기장 단계로 이동 (예: 0 -> 1)
-            if (currentPhase > MAX_BORDER_PHASES) {
-                // 모든 자기장 페이즈 완료
-                plugin.getServer().broadcastMessage(ChatColor.DARK_RED + "[GGORRI] 더 이상 자기장이 줄어들지 않습니다! 최종 자기장 단계에 도달했습니다.");
-                stopBorderSystem(); // 시스템 중지
-                return;
-            }
-
-            // ANNOUNCEMENT 상태로 진입 준비
-            prepareNextBorderPhaseData(); // 다음 자기장 크기/중심 계산
-            currentState = BorderPhaseState.ANNOUNCEMENT;
+    private void handlePreShrinkAnnouncementState() {
+        if (currentStateElapsedTimeTicks >= PRE_SHRINK_ANNOUNCEMENT_DURATION_TICKS) {
+            // 공지 시간 완료, COOLDOWN 상태로 전환
+            currentState = BorderPhaseState.COOLDOWN_BEFORE_SHRINK;
             currentStateElapsedTimeTicks = 0; // 현재 상태 시간 초기화
 
-            // ANNOUNCEMENT 상태 시작 공지
-            sendInitialAnnouncement();
+            plugin.getLogger().info("[GGORRI] PRE_SHRINK_ANNOUNCEMENT 완료. COOLDOWN_BEFORE_SHRINK 시작. 수축까지 " + (COOLDOWN_BEFORE_SHRINK_TICKS / TICK_INTERVAL) + "초 남음.");
         }
     }
 
     /**
-     * ANNOUNCEMENT 상태를 처리합니다. 수축 공지 및 카운트다운을 수행합니다.
+     * COOLDOWN_BEFORE_SHRINK 상태를 처리합니다. 수축 전 대기 및 카운트다운을 수행합니다.
      */
-    private void handleAnnouncementState() {
-        long remainingSeconds = (ANNOUNCEMENT_DURATION_TICKS - currentStateElapsedTimeTicks) / TICK_INTERVAL;
+    private void handleCooldownBeforeShrinkState() {
+        long remainingSeconds = (COOLDOWN_BEFORE_SHRINK_TICKS - currentStateElapsedTimeTicks) / TICK_INTERVAL;
 
         // 특정 시점에 채팅 공지 (액션바 없음)
-        if (remainingSeconds == 30 || remainingSeconds == 10 || (remainingSeconds <= 5 && remainingSeconds > 0)) {
+        if (remainingSeconds == 60 || remainingSeconds == 30 || remainingSeconds == 10 || (remainingSeconds <= 5 && remainingSeconds > 0)) {
             plugin.getServer().broadcastMessage(ChatColor.YELLOW + "[GGORRI] 자기장 수축 시작까지 " + remainingSeconds + "초!");
         }
 
-        if (currentStateElapsedTimeTicks >= ANNOUNCEMENT_DURATION_TICKS) {
-            // ANNOUNCEMENT 시간 완료, 다음 상태로 전환
+        if (currentStateElapsedTimeTicks >= COOLDOWN_BEFORE_SHRINK_TICKS) {
+            // COOLDOWN_BEFORE_SHRINK 시간 완료, 다음 상태로 전환
             currentState = BorderPhaseState.SHRINKING;
             currentStateElapsedTimeTicks = 0; // 현재 상태 시간 초기화
 
@@ -221,21 +209,34 @@ public class BorderManager {
     private void handleShrinkingState() {
         // 이 상태에서는 `gameBorder.setSize()`가 자동으로 수축을 처리하며,
         // `applyBorderDamageAndWarnings`가 데미지/다음 자기장 외부 경고를 담당합니다.
-        // 필요하다면 수축 완료까지 남은 시간을 채팅 등으로 표시할 수 있습니다.
-        long remainingSeconds = (SHRINK_DURATION_TICKS - currentStateElapsedTimeTicks) / TICK_INTERVAL;
-        if (remainingSeconds == 30 || remainingSeconds == 10 || (remainingSeconds <= 5 && remainingSeconds > 0)) {
-            // plugin.getServer().broadcastMessage(ChatColor.DARK_RED + "[GGORRI] 자기장 수축 완료까지 " + remainingSeconds + "초!");
-        }
-
+        // 수축 완료까지 남은 시간은 필요하다면 여기에 추가 (현재는 생략)
+        // long remainingSeconds = (SHRINK_DURATION_TICKS - currentStateElapsedTimeTicks) / TICK_INTERVAL;
+        // if (remainingSeconds == 30 || remainingSeconds == 10 || (remainingSeconds <= 5 && remainingSeconds > 0)) {
+        //     plugin.getServer().broadcastMessage(ChatColor.DARK_RED + "[GGORRI] 자기장 수축 완료까지 " + remainingSeconds + "초!");
+        // }
 
         if (currentStateElapsedTimeTicks >= SHRINK_DURATION_TICKS) {
             // SHRINKING 시간 완료, 다음 상태로 전환
-            currentState = BorderPhaseState.COOLDOWN;
-            currentStateElapsedTimeTicks = 0; // 현재 상태 시간 초기화
+            currentPhase++; // 다음 자기장 단계로 이동 (예: 0 -> 1 -> 2)
+            if (currentPhase > MAX_BORDER_PHASES) {
+                // 모든 자기장 페이즈 완료
+                plugin.getServer().broadcastMessage(ChatColor.DARK_RED + "[GGORRI] 더 이상 자기장이 줄어들지 않습니다! 최종 자기장 단계에 도달했습니다.");
+                stopBorderSystem(); // 시스템 중지
+                return;
+            }
 
             // 수축 완료 공지
             plugin.getServer().broadcastMessage(ChatColor.AQUA + "[GGORRI] 자기장 수축이 완료되었습니다!");
-            plugin.getLogger().info("[GGORRI] 자기장 " + currentPhase + "단계 수축 완료. 최종 크기: " + currentBorderSize);
+            plugin.getLogger().info("[GGORRI] 자기장 " + (currentPhase-1) + "단계 수축 완료. 최종 크기: " + currentBorderSize); // 이전 단계 완료로 표시
+
+            updateAllPlayersCompassTarget(currentBorderCenter); // 나침반 업데이트
+
+            // 다음 자기장 정보 준비 및 PRE_SHRINK_ANNOUNCEMENT 상태로 즉시 전환
+            prepareNextBorderPhaseData(); // 다음 단계 자기장 (예: 2단계) 정보 계산
+            sendInitialAnnouncement(); // 다음 자기장 (2단계) 정보 공지
+
+            currentState = BorderPhaseState.PRE_SHRINK_ANNOUNCEMENT;
+            currentStateElapsedTimeTicks = 0; // 현재 상태 시간 초기화
         }
     }
 
@@ -243,8 +244,6 @@ public class BorderManager {
      * 다음 자기장 단계의 목표 크기와 중심을 미리 계산합니다.
      */
     private void prepareNextBorderPhaseData() {
-        // currentPhase는 이미 다음 단계로 증가된 상태이므로, 이 값을 그대로 사용
-        // phaseSizes.get(currentPhase)는 다음 단계의 크기를 가져옴
         Double nextSizeFromMap = phaseSizes.get(currentPhase);
         if (nextSizeFromMap == null) {
             plugin.getLogger().severe("[GGORRI] phaseSizes 맵에 borderPhase " + currentPhase + "에 대한 크기 데이터가 없습니다! 치명적 오류. 시스템 중지.");
@@ -257,9 +256,7 @@ public class BorderManager {
         // (다음 자기장이 현재 자기장 안에 완전히 포함되면서 이동할 수 있는 반경)
         double maxMovableRadius = (currentBorderSize / 2.0) - (nextBorderSize / 2.0);
 
-        // 만약 다음 자기장이 현재 자기장보다 크거나 같아서 이동할 수 없다면
         if (maxMovableRadius < 0) {
-            // 이 경고는 현재 phaseSizes 맵 설정 상 나올 일이 없어야 하지만, 방어적으로 남겨둠
             plugin.getLogger().warning("[GGORRI] 자기장 크기 설정 오류! 다음 페이즈의 자기장이 현재(" + currentBorderSize + ")보다 큽니다(" + nextBorderSize + "). 중심 이동이 제한됩니다.");
             maxMovableRadius = 0;
         }
@@ -269,15 +266,16 @@ public class BorderManager {
         double newCenterZ = currentBorderCenter.getZ() + (random.nextDouble() * 2 - 1) * maxMovableRadius;
         nextBorderCenter = new Location(currentBorderCenter.getWorld(), newCenterX, 0, newCenterZ);
 
-        plugin.getLogger().info("[GGORRI] 다음 자기장 데이터 준비 완료. 목표 크기: " + nextBorderSize + ", 목표 중심: " + (int)nextBorderCenter.getX() + "," + (int)nextBorderCenter.getZ());
+        plugin.getLogger().info("[GGORRI] 다음 자기장 데이터 준비 완료 (Phase " + currentPhase + "). 목표 크기: " + nextBorderSize + ", 목표 중심: " + (int)nextBorderCenter.getX() + "," + (int)nextBorderCenter.getZ());
     }
 
     /**
-     * 자기장 수축 시작 전 초기 공지 메시지를 전송합니다.
+     * 자기장 수축 시작 전 초기 공지 메시지를 전송합니다. (다음 자기장 정보)
      */
     private void sendInitialAnnouncement() {
         plugin.getServer().broadcastMessage(ChatColor.YELLOW + "------------------------------------------");
-        plugin.getServer().broadcastMessage(ChatColor.YELLOW + "[GGORRI] 자기장 수축 시작까지 " + (ANNOUNCEMENT_DURATION_TICKS / TICK_INTERVAL) + "초 남았습니다!");
+        plugin.getServer().broadcastMessage(ChatColor.YELLOW + "[GGORRI] " + ChatColor.RED + "다음 자기장 정보!");
+        plugin.getServer().broadcastMessage(ChatColor.YELLOW + "[GGORRI] 자기장 수축 시작까지 " + (COOLDOWN_BEFORE_SHRINK_TICKS / TICK_INTERVAL) + "초 남았습니다!");
         plugin.getServer().broadcastMessage(ChatColor.YELLOW + "[GGORRI] 다음 자기장 중심: " + ChatColor.AQUA + "X: " + (int)nextBorderCenter.getX() + ", Z: " + (int)nextBorderCenter.getZ());
         plugin.getServer().broadcastMessage(ChatColor.YELLOW + "[GGORRI] 다음 자기장 크기: " + ChatColor.AQUA + (int)nextBorderSize + " 블록");
         plugin.getServer().broadcastMessage(ChatColor.YELLOW + "[GGORRI] 자기장이 " + ChatColor.AQUA + getDirectionString(currentBorderCenter, nextBorderCenter) + " 방향으로 이동합니다!");
@@ -318,10 +316,8 @@ public class BorderManager {
                 p.sendActionBar(ChatColor.RED + "⚠ 자기장 외부입니다! (" + String.format("%.1f", currentDamage) + " 피해) ⚠");
             } else {
                 // 2. 플레이어가 현재 자기장 안에 있지만, '다음' 자기장 밖에 있는지 확인 (액션바 경고만)
-                // 이 경고는 ANNOUNCEMENT 단계가 아니더라도, 항상 다음 자기장 구역을 알려줌
-                if (currentState == BorderPhaseState.ANNOUNCEMENT || currentState == BorderPhaseState.COOLDOWN) {
-                    // COOLDOWN 상태에서도 다음 자기장 구역이 미리 정해져 있다면 경고를 보낼 수 있습니다.
-                    // ANNOUNCEMENT 상태에서 다음 자기장 경고를 확실히 보냅니다.
+                // 이 경고는 COOLDOWN_BEFORE_SHRINK 상태에서도 다음 자기장 구역을 알려줌
+                if (currentState == BorderPhaseState.PRE_SHRINK_ANNOUNCEMENT || currentState == BorderPhaseState.COOLDOWN_BEFORE_SHRINK) {
                     if (nextBorderCenter != null && nextBorderSize > 0) {
                         if (isOutsideNextBorder(p.getLocation())) {
                             p.sendActionBar(ChatColor.LIGHT_PURPLE + "⚠️ 다음 자기장 외부입니다! 안전 지대로 이동하세요! ⚠️");
@@ -333,15 +329,32 @@ public class BorderManager {
     }
 
     /**
+     * 모든 온라인 플레이어의 나침반 목표를 지정된 위치로 업데이트합니다.
+     * @param targetLocation 나침반이 가리킬 목표 위치
+     */
+    private void updateAllPlayersCompassTarget(Location targetLocation) {
+        if (targetLocation == null) return;
+
+        for (UUID playerUUID : playersInGame.keySet()) {
+            Player p = plugin.getServer().getPlayer(playerUUID);
+            if (p != null && p.isOnline()) {
+                if (p.getWorld().equals(targetLocation.getWorld())) {
+                    p.setCompassTarget(targetLocation);
+                } else {
+                    plugin.getLogger().warning("[GGORRI] 플레이어 " + p.getName() + "이(가) 다른 월드에 있어 나침반 목표를 설정할 수 없습니다.");
+                }
+            }
+        }
+    }
+
+    /**
      * 플레이어 위치가 다음 자기장 범위 밖에 있는지 확인하는 헬퍼 메서드.
      */
     private boolean isOutsideNextBorder(Location loc) {
-        // 다음 자기장 정보가 아직 계산되지 않았거나 유효하지 않으면 false 반환 (안전 구역으로 간주)
         if (nextBorderCenter == null || nextBorderSize <= 0) {
             return false;
         }
 
-        // 월드 보더의 isInside 대신 직접 계산 (원형 보더가 아니므로 X, Z 각각 확인)
         double halfNextSize = nextBorderSize / 2.0;
         double minX = nextBorderCenter.getX() - halfNextSize;
         double maxX = nextBorderCenter.getX() + halfNextSize;

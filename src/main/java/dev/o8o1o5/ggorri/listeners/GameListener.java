@@ -1,6 +1,8 @@
 package dev.o8o1o5.ggorri.listeners;
 
 import dev.o8o1o5.ggorri.GGORRI;
+import dev.o8o1o5.ggorri.game.PlayerRole;
+import dev.o8o1o5.ggorri.manager.ChainManager;
 import dev.o8o1o5.ggorri.manager.GameManager;
 import dev.o8o1o5.ggorri.manager.PlayerManager;
 import org.bukkit.*;
@@ -12,6 +14,7 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityDamageEvent.DamageCause;
+import org.bukkit.event.player.PlayerQuitEvent;
 
 import java.util.*;
 
@@ -19,13 +22,13 @@ public class GameListener implements Listener {
     private final GGORRI plugin;
     private final GameManager gameManager;
     private final PlayerManager playerManager;
-    private final Random random; // 현재 사용하지 않으므로 필요 없으면 제거
+    private final ChainManager chainManager;
 
     public GameListener(GGORRI plugin, GameManager gameManager, PlayerManager playerManager) {
         this.plugin = plugin;
         this.gameManager = gameManager;
         this.playerManager = playerManager;
-        this.random = new Random(); // 사용하지 않으면 제거
+        this.chainManager = gameManager.getChainManager();
     }
 
     @EventHandler
@@ -134,4 +137,16 @@ public class GameListener implements Listener {
     //     // 이전에 있던 PlayerDeathEvent 로직은 onPlayerDamage로 통합되었습니다.
     //     // 따라서 이 메서드는 제거하거나, 특정 상황에만 필요한 로직이 있다면 최소한으로 유지해야 합니다.
     // }
+
+    @EventHandler
+    public void onPlayerQuit(PlayerQuitEvent event) {
+        Player quitPlayer = event.getPlayer();
+        UUID quitUUID = quitPlayer.getUniqueId();
+
+        if (playerManager.getPlayerGameData(quitUUID).getRole() != PlayerRole.LEADER) {
+            return;
+        }
+
+        chainManager.handleLeaderExit(quitUUID);
+    }
 }

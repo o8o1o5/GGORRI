@@ -404,6 +404,9 @@ public class GameManager {
         // 월드 보더 초기화 (SpawnManager에게 위임)
         spawnManager.setupWorldBorder(spawnManager.getGameWorld());
 
+        // 나침반 태스크 취소
+        trackersCompassListener.disableAllCompassTask();
+
         currentStatus = GameStatus.WAITING;
         plugin.getLogger().info("[GGORRI] 게임 종료 및 초기화 완료.");
         // 액션바 시스템은 GameManager 생성 시 시작되므로, endGame에서는 굳이 다시 시작하지 않습니다.

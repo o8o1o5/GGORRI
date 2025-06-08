@@ -64,8 +64,8 @@ public class GameRulesManager {
         deadPlayerData.incrementDeathCount();
 
         // 리스폰 지연 시간 계산
-        final long calculatedRespawnDelaySeconds = (long) (60 * Math.pow(1.5, deadPlayerData.getDeathCount() - 1));
-        final long finalRespawnDelaySeconds = Math.max(1, Math.min(600, calculatedRespawnDelaySeconds));
+        final long calculatedRespawnDelaySeconds = (long) (60 * Math.pow(1.2, deadPlayerData.getDeathCount() - 1));
+        final long finalRespawnDelaySeconds = Math.max(1, Math.min(180, calculatedRespawnDelaySeconds));
 
         // 킬러 판정
         UUID actualKillerUUID = null;
